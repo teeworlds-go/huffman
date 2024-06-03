@@ -1,5 +1,7 @@
 package huffman
 
+import "errors"
+
 const (
 	eofSymbol  = 256
 	maxSymbols = eofSymbol + 1
@@ -98,4 +100,83 @@ func (huff *Huffman) constructTree(frequencies []int) {
 	huff.startNode = &huff.nodes[huff.numNodes-1]
 
 	huff.setbitsR(huff.startNode, 0, 0)
+}
+
+func (huff *Huffman) init() {
+	huff.nodes = [maxNodes]Node{}
+	huff.decodedLuts = [lutsize]*Node{}
+	huff.startNode = nil
+	huff.numNodes = 0
+
+	huff.constructTree(frequencyTable[:])
+
+	for i := 0; i < lutsize; i++ {
+		bits := i
+		k := 0
+		node := huff.startNode
+		for k = 0; k < lutbits; k++ {
+			node = &huff.nodes[node.leafs[bits&1]]
+			bits >>= 1
+
+			if node == nil {
+				break
+			}
+
+			if node.numBits != 0 {
+				huff.decodedLuts[i] = node
+				break
+			}
+		}
+
+		if k == lutbits {
+			huff.decodedLuts[i] = node
+		}
+	}
+}
+
+func (huff *Huffman) compress(data []byte) ([]byte, error) {
+	srcIndex := 0
+	end := len(data)
+	bits := uint32(0)
+	bitcount := uint32(0)
+	dst := []byte{}
+
+	if len(data) == 0 {
+		return []byte{}, errors.New("Input empty")
+	}
+
+	symbol := data[srcIndex]
+	srcIndex++
+
+	for srcIndex < end {
+		bits |= huff.nodes[symbol].bits << bitcount
+		bitcount += huff.nodes[symbol].numBits
+
+		symbol = data[srcIndex]
+		srcIndex++
+
+		for bitcount >= 8 {
+			dst = append(dst, byte(bits&0xff))
+			bits >>= 8
+			bitcount -= 8
+		}
+	}
+
+	bits |= huff.nodes[symbol].bits << bitcount
+	bitcount += huff.nodes[symbol].numBits
+	for bitcount >= 8 {
+		dst = append(dst, byte(bits&0xff))
+		bits >>= 8
+		bitcount -= 8
+	}
+
+	bits |= huff.nodes[eofSymbol].bits << bitcount
+	bitcount += huff.nodes[eofSymbol].numBits
+	for bitcount >= 8 {
+		dst = append(dst, byte(bits&0xff))
+		bits >>= 8
+		bitcount -= 8
+	}
+	dst = append(dst, byte(bits))
+	return dst, nil
 }
