@@ -1,6 +1,9 @@
 package huffman
 
-import "errors"
+import (
+	"errors"
+	"sort"
+)
 
 const (
 	eofSymbol  = 256
@@ -29,6 +32,12 @@ var frequencyTable = [257]int{1 << 30, 4545, 2657, 431, 1950, 919, 444, 482, 224
 type ConstructNode struct {
 	nodeId    uint16
 	frequency int
+}
+
+func compareNodesByFrequencyDesc(nodes [maxSymbols]*ConstructNode) (func(int, int) bool) {
+	return func(i, j int) bool {
+		return nodes[i].frequency > nodes[j].frequency
+	}
 }
 
 type Node struct {
@@ -72,7 +81,6 @@ func (huff *Huffman) constructTree(frequencies []int) {
 
 		if i == eofSymbol {
 			nodesLeftStorage[i].frequency = 1
-			nodesLeftStorage[i].frequency = 1
 		} else {
 			nodesLeftStorage[i].frequency = frequencies[i]
 		}
@@ -82,8 +90,9 @@ func (huff *Huffman) constructTree(frequencies []int) {
 
 	huff.numNodes = maxSymbols
 
+
 	for numNodesLeft > 1 {
-		// TODO: sort
+		sort.Slice(nodesLeft[:], compareNodesByFrequencyDesc(nodesLeft))
 
 		huff.nodes[huff.numNodes].numBits = 0
 		huff.nodes[huff.numNodes].leafs[0] = nodesLeft[numNodesLeft-1].nodeId
