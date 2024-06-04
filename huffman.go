@@ -44,7 +44,7 @@ type Node struct {
 	bits    uint32
 	numBits uint32
 	leafs   [2]uint16
-	symbol  byte
+	symbol  uint8
 }
 
 type Huffman struct {
@@ -75,7 +75,7 @@ func (huff *Huffman) constructTree(frequencies []int) {
 
 	for i := 0; i < maxSymbols; i++ {
 		huff.nodes[i].numBits = 0xFFFFFFFF
-		huff.nodes[i].symbol = byte(i)
+		huff.nodes[i].symbol = uint8(i)
 		huff.nodes[i].leafs[0] = 0xffff
 		huff.nodes[i].leafs[1] = 0xffff
 
