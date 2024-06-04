@@ -92,7 +92,7 @@ func (huff *Huffman) constructTree(frequencies []int) {
 
 
 	for numNodesLeft > 1 {
-		sort.Slice(nodesLeft[:], compareNodesByFrequencyDesc(nodesLeft[:]))
+		sort.SliceStable(nodesLeft[:], compareNodesByFrequencyDesc(nodesLeft[:]))
 
 		huff.nodes[huff.numNodes].numBits = 0
 		huff.nodes[huff.numNodes].leafs[0] = nodesLeft[numNodesLeft-1].nodeId
