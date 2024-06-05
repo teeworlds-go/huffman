@@ -56,10 +56,10 @@ type Huffman struct {
 
 func (huff *Huffman) setbitsR(node *Node, bits int, depth uint32) {
 	if node.leafs[1] != 0xffff {
-		huff.setbitsR(&huff.nodes[1], bits|(1<<depth), depth+1)
+		huff.setbitsR(&huff.nodes[node.leafs[1]], bits|(1<<depth), depth+1)
 	}
 	if node.leafs[0] != 0xffff {
-		huff.setbitsR(&huff.nodes[0], bits, depth+1)
+		huff.setbitsR(&huff.nodes[node.leafs[0]], bits, depth+1)
 	}
 
 	if node.numBits != 0 {
