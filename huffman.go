@@ -34,7 +34,7 @@ type ConstructNode struct {
 	frequency int
 }
 
-func compareNodesByFrequencyDesc(nodes []*ConstructNode) (func(int, int) bool) {
+func compareNodesByFrequencyDesc(nodes []*ConstructNode) func(int, int) bool {
 	return func(i, j int) bool {
 		return nodes[i].frequency > nodes[j].frequency
 	}
@@ -90,7 +90,6 @@ func (huff *Huffman) constructTree(frequencies []int) {
 
 	huff.numNodes = maxSymbols
 
-
 	for numNodesLeft > 1 {
 		sort.SliceStable(nodesLeft[:], compareNodesByFrequencyDesc(nodesLeft[:]))
 
@@ -141,6 +140,70 @@ func (huff *Huffman) init() {
 			huff.decodedLuts[i] = node
 		}
 	}
+}
+
+func (huff *Huffman) decompress(data []byte) ([]byte, error) {
+	dst := []byte{}
+	srcIndex := 0
+	size := len(data)
+	bits := uint32(0)
+	bitcount := uint32(0)
+	eof := &huff.nodes[eofSymbol]
+	var node *Node
+
+	for {
+		node = nil
+		if bitcount >= lutbits {
+			node = huff.decodedLuts[bits&lutmask]
+		}
+
+		for bitcount < 24 && srcIndex < size {
+			bits |= uint32(data[srcIndex] << byte(bitcount))
+			srcIndex += 1
+			bitcount += 8
+		}
+
+		if node == nil {
+			node = huff.decodedLuts[bits&lutmask]
+		}
+
+		if node == nil {
+			return nil, errors.New("Failed to decompress data (node is nil).")
+		}
+
+		if node.numBits != 0 {
+			bits >>= node.numBits
+			bitcount -= node.numBits
+		} else {
+			bits >>= lutbits
+			bitcount -= lutbits
+
+			for {
+				node = &huff.nodes[node.leafs[bits&1]]
+
+				bitcount--
+				bits >>= 1
+
+				if node.numBits != 0 {
+					break
+				}
+
+				if bitcount == 0 {
+					return nil, errors.New("No more bits, decoding error")
+				}
+			}
+		}
+		if node == eof {
+			break
+		}
+		if len(dst) == size {
+			return nil, errors.New("Failed to decompress data (end reached).")
+		}
+
+		dst = append(dst, node.symbol)
+	}
+
+	return dst, nil
 }
 
 func (huff *Huffman) compress(data []byte) ([]byte, error) {
