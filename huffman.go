@@ -29,18 +29,18 @@ var frequencyTable = [257]int{1 << 30, 4545, 2657, 431, 1950, 919, 444, 482, 224
 	12, 18, 18, 27, 20, 18, 15, 19, 11, 17, 33, 12, 18, 15, 19, 18, 16, 26, 17, 18,
 	9, 10, 25, 22, 22, 17, 20, 16, 6, 16, 15, 20, 14, 18, 24, 335, 1517}
 
-type ConstructNode struct {
+type constructNode struct {
 	nodeId    uint16
 	frequency int
 }
 
-func compareNodesByFrequencyDesc(nodes []*ConstructNode) func(int, int) bool {
+func compareNodesByFrequencyDesc(nodes []*constructNode) func(int, int) bool {
 	return func(i, j int) bool {
 		return nodes[i].frequency > nodes[j].frequency
 	}
 }
 
-type Node struct {
+type node struct {
 	bits    uint32
 	numBits uint32
 	leafs   [2]uint16
@@ -48,29 +48,29 @@ type Node struct {
 }
 
 type Huffman struct {
-	nodes       [maxNodes]Node
-	decodedLuts [lutsize]*Node
-	startNode   *Node
+	nodes       [maxNodes]node
+	decodedLuts [lutsize]*node
+	startNode   *node
 	numNodes    int
 }
 
-func (huff *Huffman) setbitsR(node *Node, bits int, depth uint32) {
-	if node.leafs[1] != 0xffff {
-		huff.setbitsR(&huff.nodes[node.leafs[1]], bits|(1<<depth), depth+1)
+func (huff *Huffman) setbitsR(n *node, bits int, depth uint32) {
+	if n.leafs[1] != 0xffff {
+		huff.setbitsR(&huff.nodes[n.leafs[1]], bits|(1<<depth), depth+1)
 	}
-	if node.leafs[0] != 0xffff {
-		huff.setbitsR(&huff.nodes[node.leafs[0]], bits, depth+1)
+	if n.leafs[0] != 0xffff {
+		huff.setbitsR(&huff.nodes[n.leafs[0]], bits, depth+1)
 	}
 
-	if node.numBits != 0 {
-		node.bits = uint32(bits)
-		node.numBits = depth
+	if n.numBits != 0 {
+		n.bits = uint32(bits)
+		n.numBits = depth
 	}
 }
 
 func (huff *Huffman) constructTree(frequencies []int) {
-	nodesLeftStorage := [maxSymbols]ConstructNode{}
-	nodesLeft := [maxSymbols]*ConstructNode{}
+	nodesLeftStorage := [maxSymbols]constructNode{}
+	nodesLeft := [maxSymbols]*constructNode{}
 	numNodesLeft := maxSymbols
 
 	for i := 0; i < maxSymbols; i++ {
@@ -111,8 +111,8 @@ func (huff *Huffman) constructTree(frequencies []int) {
 }
 
 func (huff *Huffman) Init() {
-	huff.nodes = [maxNodes]Node{}
-	huff.decodedLuts = [lutsize]*Node{}
+	huff.nodes = [maxNodes]node{}
+	huff.decodedLuts = [lutsize]*node{}
 	huff.startNode = nil
 	huff.numNodes = 0
 
@@ -121,23 +121,23 @@ func (huff *Huffman) Init() {
 	for i := 0; i < lutsize; i++ {
 		bits := i
 		k := 0
-		node := huff.startNode
+		n := huff.startNode
 		for k = 0; k < lutbits; k++ {
-			node = &huff.nodes[node.leafs[bits&1]]
+			n = &huff.nodes[n.leafs[bits&1]]
 			bits >>= 1
 
-			if node == nil {
+			if n == nil {
 				break
 			}
 
-			if node.numBits != 0 {
-				huff.decodedLuts[i] = node
+			if n.numBits != 0 {
+				huff.decodedLuts[i] = n
 				break
 			}
 		}
 
 		if k == lutbits {
-			huff.decodedLuts[i] = node
+			huff.decodedLuts[i] = n
 		}
 	}
 }
@@ -149,12 +149,12 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	bits := uint32(0)
 	bitcount := uint32(0)
 	eof := &huff.nodes[eofSymbol]
-	var node *Node
+	var n *node
 
 	for {
-		node = nil
+		n = nil
 		if bitcount >= lutbits {
-			node = huff.decodedLuts[bits&lutmask]
+			n = huff.decodedLuts[bits&lutmask]
 		}
 
 		for bitcount < 24 && srcIndex < size {
@@ -163,28 +163,28 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 			bitcount += 8
 		}
 
-		if node == nil {
-			node = huff.decodedLuts[bits&lutmask]
+		if n == nil {
+			n = huff.decodedLuts[bits&lutmask]
 		}
 
-		if node == nil {
+		if n == nil {
 			return nil, errors.New("Failed to decompress data (node is nil).")
 		}
 
-		if node.numBits != 0 {
-			bits >>= node.numBits
-			bitcount -= node.numBits
+		if n.numBits != 0 {
+			bits >>= n.numBits
+			bitcount -= n.numBits
 		} else {
 			bits >>= lutbits
 			bitcount -= lutbits
 
 			for {
-				node = &huff.nodes[node.leafs[bits&1]]
+				n = &huff.nodes[n.leafs[bits&1]]
 
 				bitcount--
 				bits >>= 1
 
-				if node.numBits != 0 {
+				if n.numBits != 0 {
 					break
 				}
 
@@ -193,11 +193,11 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 				}
 			}
 		}
-		if node == eof {
+		if n == eof {
 			break
 		}
 
-		dst = append(dst, node.symbol)
+		dst = append(dst, n.symbol)
 	}
 
 	return dst, nil
