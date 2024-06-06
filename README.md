@@ -21,7 +21,6 @@ import (
 
 func main() {
 	huff := huffman.Huffman{}
-	huff.Init()
 
 	data, err := huff.Compress([]byte("hello world"))
 	if err != nil {
