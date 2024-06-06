@@ -9,15 +9,15 @@ import (
 
 func TestRecompress(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
 	fakeData := []byte{1, 2, 3, 4, 0, 0, 0, 0, 0}
 
 	for i := 0; i < 255; i++ {
 		fakeData[6] = byte(i)
 
-		compressed, err := huff.compress(fakeData)
-		decompressed, err := huff.decompress(compressed)
+		compressed, err := huff.Compress(fakeData)
+		decompressed, err := huff.Decompress(compressed)
 
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
@@ -33,10 +33,10 @@ func TestRecompress(t *testing.T) {
 
 func TestDecompressFoo(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
 	// values tested against https://github.com/ChillerDragon/huffman-py
-	got, err := huff.decompress([]byte{0x74, 0xde, 0x16, 0xd9, 0x22, 0xc5, 0x0d})
+	got, err := huff.Decompress([]byte{0x74, 0xde, 0x16, 0xd9, 0x22, 0xc5, 0x0d})
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -50,12 +50,12 @@ func TestDecompressFoo(t *testing.T) {
 
 func TestDecompressShouldMatchHuffmanPy(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
 	// values tested against huffman-py (python rewrite)
 	// https://github.com/ChillerDragon/huffman-py/blob/d1f9e280fdf57b2f145fa896c095128ea752cab5/tests/basic_test.py#L5-L7
 	compressed := []byte{0x4a, 0x42, 0x88, 0x4a, 0x6e, 0x16, 0xba, 0x31, 0x46, 0xa2, 0x84, 0x9e, 0xbf, 0xe2, 0x06}
-	got, err := huff.decompress(compressed)
+	got, err := huff.Decompress(compressed)
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -70,7 +70,7 @@ func TestDecompressShouldMatchHuffmanPy(t *testing.T) {
 
 func TestDecompressRealSnapSingle(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
 	// values tested against huffman-tw ruby wrapper around the reference C++ implementation
 	// https://github.com/ChillerDragon/huffman-tw/blob/46f419467bc7ea776074e2b3f1b332d89a9cdf9e/spec/03_real_traffic.rb#L30-L40
@@ -80,7 +80,7 @@ func TestDecompressRealSnapSingle(t *testing.T) {
 		0x22, 0xac, 0xaf, 0xa3, 0x1f, 0xb4, 0x07, 0xe2, 0x4a, 0xc3, 0xfa, 0x3a, 0x9a, 0xd4, 0xbe, 0xbe,
 		0x1e, 0xef, 0x9f, 0xac, 0xb8, 0x01,
 	}
-	got, err := huff.decompress(compressed)
+	got, err := huff.Decompress(compressed)
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -100,12 +100,12 @@ func TestDecompressRealSnapSingle(t *testing.T) {
 
 func TestDecompressAbc(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
 	// values tested against huffman-tw
 	// https://github.com/ChillerDragon/huffman-tw/blob/2268be9e018758f44b42aaf90d232a2180a7cc0b/spec/02_basic_spec.rb#L28
 	compressed := []byte{188, 181, 98, 92, 113, 3}
-	got, err := huff.decompress(compressed)
+	got, err := huff.Decompress(compressed)
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -122,9 +122,9 @@ func TestDecompressAbc(t *testing.T) {
 
 func TestCompressFoo(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
-	got, err := huff.compress([]byte("foo"))
+	got, err := huff.Compress([]byte("foo"))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -138,9 +138,9 @@ func TestCompressFoo(t *testing.T) {
 
 func TestCompressHelloWorld(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
-	got, err := huff.compress([]byte("hello world"))
+	got, err := huff.Compress([]byte("hello world"))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -154,9 +154,9 @@ func TestCompressHelloWorld(t *testing.T) {
 
 func TestCompressEmpty(t *testing.T) {
 	huff := Huffman{}
-	huff.init()
+	huff.Init()
 
-	_, err := huff.compress([]byte{})
+	_, err := huff.Compress([]byte{})
 	if err == nil {
 		t.Errorf("Expected error on empty input")
 	}

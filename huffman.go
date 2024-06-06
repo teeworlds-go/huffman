@@ -110,7 +110,7 @@ func (huff *Huffman) constructTree(frequencies []int) {
 	huff.setbitsR(huff.startNode, 0, 0)
 }
 
-func (huff *Huffman) init() {
+func (huff *Huffman) Init() {
 	huff.nodes = [maxNodes]Node{}
 	huff.decodedLuts = [lutsize]*Node{}
 	huff.startNode = nil
@@ -142,7 +142,7 @@ func (huff *Huffman) init() {
 	}
 }
 
-func (huff *Huffman) decompress(data []byte) ([]byte, error) {
+func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	dst := []byte{}
 	srcIndex := 0
 	size := len(data)
@@ -203,7 +203,7 @@ func (huff *Huffman) decompress(data []byte) ([]byte, error) {
 	return dst, nil
 }
 
-func (huff *Huffman) compress(data []byte) ([]byte, error) {
+func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	srcIndex := 0
 	end := len(data)
 	bits := uint32(0)
