@@ -158,7 +158,7 @@ func (huff *Huffman) decompress(data []byte) ([]byte, error) {
 		}
 
 		for bitcount < 24 && srcIndex < size {
-			bits |= uint32(data[srcIndex] << byte(bitcount))
+			bits |= uint32(data[srcIndex]) << bitcount
 			srcIndex += 1
 			bitcount += 8
 		}
