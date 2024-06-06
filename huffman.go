@@ -196,9 +196,6 @@ func (huff *Huffman) decompress(data []byte) ([]byte, error) {
 		if node == eof {
 			break
 		}
-		if len(dst) == size {
-			return nil, errors.New("Failed to decompress data (end reached).")
-		}
 
 		dst = append(dst, node.symbol)
 	}
