@@ -6,7 +6,7 @@ import (
 )
 
 func TestSnap(t *testing.T) {
-	// verified with libtw2 
+	// verified with libtw2
 
 	huff := Huffman{}
 	huff.Init()
