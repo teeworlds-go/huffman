@@ -103,11 +103,11 @@ func FuzzWrite(f *testing.F) {
 		if len(data) == 0 {
 			return
 		}
-		inStream := bytes.NewReader(data)
-		encodedStream := bytes.NewBuffer(make([]byte, 0, len(data)))
+		inputStream := bytes.NewReader(data)
+		compressedStream := bytes.NewBuffer(make([]byte, 0, len(data)))
 
-		w := NewWriterDict(dict, encodedStream)
-		n, err := io.CopyBuffer(w, inStream, make([]byte, 2)) // we want to test with a small buffer explicitly
+		w := NewWriterDict(dict, compressedStream)
+		n, err := io.CopyBuffer(w, inputStream, make([]byte, 2)) // we want to test with a small buffer explicitly
 		if err != nil {
 			t.Fatalf("error writing: %v", err)
 		}
@@ -121,8 +121,8 @@ func FuzzWrite(f *testing.F) {
 			t.Fatalf("error compressing: %v", err)
 		}
 
-		if !bytes.Equal(compressed, encodedStream.Bytes()) {
-			t.Fatalf("expected %v(%s), got %v(%s)", compressed, string(compressed), encodedStream.Bytes(), string(encodedStream.Bytes()))
+		if !bytes.Equal(compressed, compressedStream.Bytes()) {
+			t.Fatalf("expected %v(%s), got %v(%s)", compressed, string(compressed), compressedStream.Bytes(), string(compressedStream.Bytes()))
 		}
 	})
 }
