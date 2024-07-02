@@ -99,14 +99,14 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 		return []byte{}, errors.New("Input empty")
 	}
 
-	Symbol := data[srcIndex]
+	symbol := data[srcIndex]
 	srcIndex++
 
 	for srcIndex < end {
-		bits |= huff.nodes[Symbol].Bits << bitcount
-		bitcount += huff.nodes[Symbol].NumBits
+		bits |= huff.nodes[symbol].Bits << bitcount
+		bitcount += huff.nodes[symbol].NumBits
 
-		Symbol = data[srcIndex]
+		symbol = data[srcIndex]
 		srcIndex++
 
 		for bitcount >= 8 {
@@ -116,8 +116,8 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 		}
 	}
 
-	bits |= huff.nodes[Symbol].Bits << bitcount
-	bitcount += huff.nodes[Symbol].NumBits
+	bits |= huff.nodes[symbol].Bits << bitcount
+	bitcount += huff.nodes[symbol].NumBits
 	for bitcount >= 8 {
 		dst = append(dst, byte(bits&0xff))
 		bits >>= 8
