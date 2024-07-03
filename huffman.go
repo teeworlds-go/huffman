@@ -9,6 +9,26 @@ const (
 	MaxSymbols = EofSymbol
 )
 
+// Compress compresses the given data using the default Teeworlds' dictionary.
+func Compress(data []byte) ([]byte, error) {
+	return NewHuffmanDict(DefaultDictionary).Compress(data)
+}
+
+// CompressDict compresses the given data using the given dictionary.
+func CompressDict(dict *Dictionary, data []byte) ([]byte, error) {
+	return NewHuffmanDict(dict).Compress(data)
+}
+
+// Decompress decompresses the given data using the default Teeworlds' dictionary.
+func Decompress(data []byte) ([]byte, error) {
+	return NewHuffmanDict(DefaultDictionary).Decompress(data)
+}
+
+// DecompressDict decompresses the given data using the given dictionary.
+func DecompressDict(dict *Dictionary, data []byte) ([]byte, error) {
+	return NewHuffmanDict(dict).Decompress(data)
+}
+
 type Huffman struct {
 	*Dictionary
 }
@@ -25,6 +45,7 @@ func NewHuffmanDict(d *Dictionary) *Huffman {
 	}
 }
 
+// Decompress decompresses the given data.
 func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
@@ -90,6 +111,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	return dst, nil
 }
 
+// Compress compresses the given data.
 func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 
 	srcIndex := 0
