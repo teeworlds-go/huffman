@@ -38,6 +38,13 @@ jobs:
           # in order to use the previous old stable version.
           go-version: "stable"
 
+      - name: Build go snippets in readme
+        run: |
+          mkdir -p ~/.local/bin/
+          wget -O ~/.local/bin/lintdown.sh https://raw.githubusercontent.com/ChillerDragon/lintdown.sh/master/lintdown.sh
+          chmod +x ~/.local/bin/lintdown.sh
+          lintdown.sh README.md
+
       - name: Build
         run: go build -v ./...
 
