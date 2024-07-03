@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/teeworlds-go/huffman"
+	"github.com/teeworlds-go/huffman/v2"
 )
 
 func ExampleReader_Read() {

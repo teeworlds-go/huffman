@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/teeworlds-go/huffman"
+	"github.com/teeworlds-go/huffman/v2"
 )
 
 func TestReaderRead(t *testing.T) {
