@@ -7,6 +7,11 @@ Teeworlds huffman compression library.
 ## Installation
 
 ```shell
+
+// for latest tagged released
+go get github.com/teeworlds-go/huffman@latest
+
+// for bleeding edge master branch version
 go get github.com/teeworlds-go/huffman@master
 ```
 
