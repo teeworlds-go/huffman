@@ -1,7 +1,7 @@
 package huffman
 
 import (
-	"errors"
+	"fmt"
 )
 
 const (
@@ -76,7 +76,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 		}
 
 		if n == nil {
-			return nil, errors.New("failed to decompress data: node is nil")
+			return nil, fmt.Errorf("%w: node is nil", ErrHuffmanDecompress)
 		}
 
 		if n.NumBits != 0 {
@@ -97,7 +97,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 				}
 
 				if bitcount == 0 {
-					return nil, errors.New("decoding error: no more bits")
+					return nil, fmt.Errorf("%w: no more bits", ErrHuffmanDecompress)
 				}
 			}
 		}
