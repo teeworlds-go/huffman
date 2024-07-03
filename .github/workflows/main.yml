@@ -2,27 +2,48 @@ name: Go
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
+    paths:
+      - "**.go"
+      - "**.yaml"
+      - "**.yml"
+      - "**.json"
+      - "go.mod"
+      - "go.sum"
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
+    paths:
+      - "**.go"
+      - "**.yaml"
+      - "**.yml"
+      - "**.json"
+      - "go.mod"
+      - "go.sum"
+
+concurrency:
+  # prevent multiple workflows from running at the same time for the same pr/branch/tag etc.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.22'
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          # Latest 'stable' go version. Use 'oldstable'
+          # in order to use the previous old stable version.
+          go-version: "stable"
 
-    - name: Build
-      run: go build -v ./...
+      - name: Build
+        run: go build -v ./...
 
-    - name: Test
-      run: go test -v ./...
+      - name: Test
+        # limit parallelization in order to avoid potentially weird github runner behavior.
+        run: go test -timeout 900s -race -count=1 -parallel 2 ./...
 
-    - name: Format
-      run: diff -u <(echo -n) <(gofmt -d ./)
+      - name: Format
+        run: diff -u <(echo -n) <(gofmt -d ./)
