@@ -7,9 +7,7 @@ import (
 	"testing"
 )
 
-func FuzzWrite(f *testing.F) {
-	refHuffman := NewHuffman()
-
+func FuzzWriterWrite(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte("hello"))
 	f.Add([]byte("1234567890"))
@@ -96,35 +94,37 @@ func FuzzWrite(f *testing.F) {
 		0x03, 0x22, 0x02, 0x00, 0x00, 0x17,
 	})
 
-	dict := NewDictionary()
-
 	f.Fuzz(func(t *testing.T, data []byte) {
-		// TODO: except for the case where no data is passed, Compress and Write should do the same.
-		if len(data) == 0 {
-			return
-		}
-		inputStream := bytes.NewReader(data)
-		compressedStream := bytes.NewBuffer(make([]byte, 0, len(data)))
-
-		w := NewWriterDict(dict, compressedStream)
-		n, err := io.CopyBuffer(w, inputStream, make([]byte, 2)) // we want to test with a small buffer explicitly
-		if err != nil {
-			t.Fatalf("error writing: %v", err)
-		}
-
-		if n != int64(len(data)) {
-			t.Fatalf("expected to write %d bytes, wrote %d", len(data), n)
-		}
-
-		compressed, err := refHuffman.Compress(data)
-		if err != nil {
-			t.Fatalf("error compressing: %v", err)
-		}
-
-		if !bytes.Equal(compressed, compressedStream.Bytes()) {
-			t.Fatalf("expected %v(%s), got %v(%s)", compressed, string(compressed), compressedStream.Bytes(), string(compressedStream.Bytes()))
-		}
+		testWriteAndCompareWithCompress(t, data)
 	})
+}
+
+func testWriteAndCompareWithCompress(t *testing.T, data []byte) {
+
+	var (
+		huff             = NewHuffman()
+		inputStream      = bytes.NewReader(data)
+		compressedStream = bytes.NewBuffer(make([]byte, 0, len(data)))
+		w                = NewWriter(compressedStream)
+	)
+
+	n, err := io.CopyBuffer(w, inputStream, make([]byte, 1)) // we want to test with a small buffer explicitly
+	if err != nil {
+		t.Fatalf("error writing: %v", err)
+	}
+
+	if n != int64(len(data)) {
+		t.Fatalf("expected to write %d bytes, wrote %d", len(data), n)
+	}
+
+	compressed, err := huff.Compress(data)
+	if err != nil {
+		t.Fatalf("error compressing: %v", err)
+	}
+
+	if !bytes.Equal(compressed, compressedStream.Bytes()) {
+		t.Fatalf("expected %v(%s), got %v(%s)", compressed, string(compressed), compressedStream.Bytes(), compressedStream.String())
+	}
 }
 
 func BenchmarkCompression(b *testing.B) {
