@@ -1,6 +1,6 @@
 # huffman
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/teeworlds-go/huffman.svg)](https://pkg.go.dev/github.com/teeworlds-go/huffman)
+[![Go Reference](https://pkg.go.dev/badge/github.com/teeworlds-go/huffman.svg)](https://pkg.go.dev/github.com/teeworlds-go/huffman) [![Go Report Card](https://goreportcard.com/badge/github.com/teeworlds-go/huffman)](https://goreportcard.com/report/github.com/teeworlds-go/huffman)
 
 Teeworlds huffman compression library.
 
