@@ -26,14 +26,14 @@ import (
 )
 
 func main() {
-    data, err := huffmann.Compress([]byte("hello world"))
+    data, err := huffman.Compress([]byte("hello world"))
     if err != nil {
         panic(err)
     }
     // data: [174 149 19 92 9 87 194 22 177 86 220 218 34 56 185 18 156 168 184 1]
     fmt.Printf("data: %v\n", data)
 
-    data, err = huffmann.Decompress([]byte{174, 149, 19, 92, 9, 87, 194, 22, 177, 86, 220, 218, 34, 56, 185, 18, 156, 168, 184, 1})
+    data, err = huffman.Decompress([]byte{174, 149, 19, 92, 9, 87, 194, 22, 177, 86, 220, 218, 34, 56, 185, 18, 156, 168, 184, 1})
     if err != nil {
         panic(err)
     }
