@@ -26,6 +26,9 @@ func NewHuffmanDict(d *Dictionary) *Huffman {
 }
 
 func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return []byte{}, nil
+	}
 
 	dst := []byte{}
 	srcIndex := 0
@@ -52,7 +55,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 		}
 
 		if n == nil {
-			return nil, errors.New("Failed to decompress data (node is nil).")
+			return nil, errors.New("failed to decompress data: node is nil")
 		}
 
 		if n.NumBits != 0 {
@@ -73,7 +76,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 				}
 
 				if bitcount == 0 {
-					return nil, errors.New("No more bits, decoding error")
+					return nil, errors.New("decoding error: no more bits")
 				}
 			}
 		}
@@ -96,7 +99,7 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	dst := []byte{}
 
 	if len(data) == 0 {
-		return []byte{}, errors.New("Input empty")
+		return []byte{}, nil
 	}
 
 	symbol := data[srcIndex]
