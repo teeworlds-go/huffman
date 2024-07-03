@@ -1,5 +1,7 @@
 # huffman
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/teeworlds-go/huffman.svg)](https://pkg.go.dev/github.com/teeworlds-go/huffman)
+
 Teeworlds huffman compression library.
 
 ## Installation
