@@ -39,4 +39,5 @@ func main() {
     }
     // data: hello world
     fmt.Printf("data: %v\n", string(data))
+}
 ```
