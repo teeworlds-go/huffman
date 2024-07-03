@@ -3,10 +3,10 @@ package huffman
 import "sort"
 
 const (
-	huffmanMaxNodes        = (HuffmanMaxSymbols)*2 + 1 // +1 for additional EOF symbol
-	huffmanLookupTableBits = 10
-	huffmanLookupTableSize = (1 << huffmanLookupTableBits)
-	huffmanLookupTableMask = (huffmanLookupTableSize - 1)
+	maxNodes        = (MaxSymbols)*2 + 1 // +1 for additional EOF symbol
+	lookupTableBits = 10
+	lookupTableSize = (1 << lookupTableBits)
+	lookupTableMask = (lookupTableSize - 1)
 )
 
 var (
@@ -19,7 +19,7 @@ var (
 	// The C++ implementation has an additional frequency on
 	// the 256th index with the value 1517 which is overwritten
 	// in the huffman constructor anyway, making it obsolete
-	TeeworldsFrequencyTable = [HuffmanMaxSymbols]uint32{
+	TeeworldsFrequencyTable = [MaxSymbols]uint32{
 		1 << 30, 4545, 2657, 431, 1950, 919, 444, 482, 2244, 617, 838, 542, 715, 1814, 304, 240, 754, 212, 647, 186,
 		283, 131, 146, 166, 543, 164, 167, 136, 179, 859, 363, 113, 157, 154, 204, 108, 137, 180, 202, 176,
 		872, 404, 168, 134, 151, 111, 113, 109, 120, 126, 129, 100, 41, 20, 16, 22, 18, 18, 17, 19,
@@ -38,8 +38,8 @@ var (
 
 // Dictionary is a huffman lookup table/tree that is used to lookup symbols and their corresponding huffman codes.
 type Dictionary struct {
-	nodes     [huffmanMaxNodes]node
-	decodeLut [huffmanLookupTableSize]*node
+	nodes     [maxNodes]node
+	decodeLut [lookupTableSize]*node
 	startNode *node
 	numNodes  uint16
 }
@@ -62,20 +62,20 @@ func NewDictionary() *Dictionary {
 	return NewDictionaryWithFrequencies(TeeworldsFrequencyTable)
 }
 
-func NewDictionaryWithFrequencies(frequencyTable [HuffmanMaxSymbols]uint32) *Dictionary {
+func NewDictionaryWithFrequencies(frequencyTable [MaxSymbols]uint32) *Dictionary {
 
 	d := Dictionary{}
 	d.constructTree(frequencyTable)
 
 	// build decode lookup table (LUT)
-	for i := 0; i < huffmanLookupTableSize; i++ {
+	for i := 0; i < lookupTableSize; i++ {
 		var (
 			bits uint32 = uint32(i)
 			k    int
 			n    = d.startNode
 		)
 
-		for k = 0; k < huffmanLookupTableBits; k++ {
+		for k = 0; k < lookupTableBits; k++ {
 			n = &d.nodes[n.Leafs[bits&1]]
 			bits >>= 1
 
@@ -85,7 +85,7 @@ func NewDictionaryWithFrequencies(frequencyTable [HuffmanMaxSymbols]uint32) *Dic
 			}
 		}
 
-		if k == huffmanLookupTableBits {
+		if k == lookupTableBits {
 			d.decodeLut[i] = n
 		}
 
@@ -115,20 +115,20 @@ func (d *Dictionary) setBitsR(n *node, bits uint32, depth uint8) {
 	}
 }
 
-func (d *Dictionary) constructTree(frequencyTable [HuffmanMaxSymbols]uint32) {
+func (d *Dictionary) constructTree(frequencyTable [MaxSymbols]uint32) {
 
 	var (
 		// +1 for additional EOF symbol
-		nodesLeftStorage [HuffmanMaxSymbols + 1]constructNode
-		nodesLeft        [HuffmanMaxSymbols + 1]*constructNode
-		numNodesLeft     = HuffmanMaxSymbols + 1
+		nodesLeftStorage [MaxSymbols + 1]constructNode
+		nodesLeft        [MaxSymbols + 1]*constructNode
+		numNodesLeft     = MaxSymbols + 1
 
 		n  *node
 		ns *constructNode
 	)
 
 	// +1 for EOF symbol
-	for i := uint16(0); i < HuffmanMaxSymbols+1; i++ {
+	for i := uint16(0); i < MaxSymbols+1; i++ {
 		n = &d.nodes[i]
 		n.NumBits = 0xff
 		n.Symbol = byte(i)
@@ -136,7 +136,7 @@ func (d *Dictionary) constructTree(frequencyTable [HuffmanMaxSymbols]uint32) {
 		n.Leafs[1] = 0xffff
 
 		ns = &nodesLeftStorage[i]
-		if i == HuffmanEOFSymbol {
+		if i == EOFSymbol {
 			ns.frequency = 1
 		} else {
 			ns.frequency = frequencyTable[i]
@@ -145,7 +145,7 @@ func (d *Dictionary) constructTree(frequencyTable [HuffmanMaxSymbols]uint32) {
 		nodesLeft[i] = ns
 	}
 
-	d.numNodes = HuffmanMaxSymbols + 1 // +1 for EOF symbol
+	d.numNodes = MaxSymbols + 1 // +1 for EOF symbol
 	for numNodesLeft > 1 {
 
 		sort.Stable(byFrequencyDesc(nodesLeft[:numNodesLeft]))

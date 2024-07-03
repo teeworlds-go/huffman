@@ -5,8 +5,8 @@ import (
 )
 
 const (
-	HuffmanEOFSymbol  = 256
-	HuffmanMaxSymbols = HuffmanEOFSymbol
+	EOFSymbol  = 256
+	MaxSymbols = EOFSymbol
 )
 
 type Huffman struct {
@@ -32,13 +32,13 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	size := len(data)
 	bits := uint32(0)
 	bitcount := uint8(0)
-	eof := &huff.nodes[HuffmanEOFSymbol]
+	eof := &huff.nodes[EOFSymbol]
 	var n *node
 
 	for {
 		n = nil
-		if bitcount >= huffmanLookupTableBits {
-			n = huff.decodeLut[bits&huffmanLookupTableMask]
+		if bitcount >= lookupTableBits {
+			n = huff.decodeLut[bits&lookupTableMask]
 		}
 
 		for bitcount < 24 && srcIndex < size {
@@ -48,7 +48,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 		}
 
 		if n == nil {
-			n = huff.decodeLut[bits&huffmanLookupTableMask]
+			n = huff.decodeLut[bits&lookupTableMask]
 		}
 
 		if n == nil {
@@ -59,8 +59,8 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 			bits >>= n.NumBits
 			bitcount -= n.NumBits
 		} else {
-			bits >>= huffmanLookupTableBits
-			bitcount -= huffmanLookupTableBits
+			bits >>= lookupTableBits
+			bitcount -= lookupTableBits
 
 			for {
 				n = &huff.nodes[n.Leafs[bits&1]]
@@ -124,8 +124,8 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 		bitcount -= 8
 	}
 
-	bits |= huff.nodes[HuffmanEOFSymbol].Bits << bitcount
-	bitcount += huff.nodes[HuffmanEOFSymbol].NumBits
+	bits |= huff.nodes[EOFSymbol].Bits << bitcount
+	bitcount += huff.nodes[EOFSymbol].NumBits
 	for bitcount >= 8 {
 		dst = append(dst, byte(bits&0xff))
 		bits >>= 8
