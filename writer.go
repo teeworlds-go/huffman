@@ -86,7 +86,7 @@ func (h *Writer) Write(data []byte) (written int, err error) {
 		}
 	}
 
-	nodeEOF := h.d.nodes[EOFSymbol]
+	nodeEOF := h.d.nodes[EofSymbol]
 	bits |= nodeEOF.Bits << bitCount
 	bitCount += nodeEOF.NumBits
 
