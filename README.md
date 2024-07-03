@@ -22,7 +22,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/teeworlds-go/huffman"
+	"github.com/teeworlds-go/huffman/v2"
 )
 
 func main() {
