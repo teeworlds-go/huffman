@@ -10,6 +10,7 @@ on:
       - "**.json"
       - "go.mod"
       - "go.sum"
+      - README.md
   pull_request:
     branches: ["master"]
     paths:
@@ -19,6 +20,7 @@ on:
       - "**.json"
       - "go.mod"
       - "go.sum"
+      - README.md
 
 concurrency:
   # prevent multiple workflows from running at the same time for the same pr/branch/tag etc.
