@@ -9,7 +9,7 @@ import (
 	"github.com/teeworlds-go/huffman"
 )
 
-func TestReadRead(t *testing.T) {
+func TestReaderRead(t *testing.T) {
 
 	table := []struct {
 		Name       string
