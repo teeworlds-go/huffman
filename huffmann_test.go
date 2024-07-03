@@ -1,6 +1,7 @@
 package huffman
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 )
@@ -151,7 +152,47 @@ func TestCompressEmpty(t *testing.T) {
 	huff := NewHuffman()
 
 	_, err := huff.Compress([]byte{})
-	if err == nil {
-		t.Errorf("Expected error on empty input")
+	if err != nil {
+		t.Errorf("Expected error no error on empty input: %v", err)
 	}
+}
+
+func TestDecompressEmpty(t *testing.T) {
+	huff := NewHuffman()
+
+	_, err := huff.Decompress([]byte{})
+	if err != nil {
+		t.Errorf("Expected error no error on empty input: %v", err)
+	}
+}
+
+func FuzzHuffmannCompressDecompress(f *testing.F) {
+	f.Add([]byte("hello"))
+	f.Add([]byte("1234567890"))
+	f.Add([]byte("1234567890abcdef"))
+	f.Add([]byte("1234567890abcdef1234567890abcdef"))
+	f.Add([]byte("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"))
+	f.Add([]byte("cfgvlhböjnhavUBÖObv)öob"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) == 0 {
+			return
+		}
+
+		huff := NewHuffman()
+
+		compressed, err := huff.Compress(data)
+		if err != nil {
+			t.Fatalf("Unexpected compression error: %v", err)
+		}
+
+		decompressed, err := huff.Decompress(compressed)
+		if err != nil {
+			t.Fatalf("Unexpected decompression error: %v", err)
+		}
+
+		if !bytes.Equal(decompressed, data) {
+			t.Fatalf("wanted %v, got %v", data, decompressed)
+		}
+	})
 }

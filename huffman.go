@@ -1,13 +1,33 @@
 package huffman
 
 import (
-	"errors"
+	"fmt"
 )
 
 const (
 	EofSymbol  = 256
 	MaxSymbols = EofSymbol
 )
+
+// Compress compresses the given data using the default Teeworlds' dictionary.
+func Compress(data []byte) ([]byte, error) {
+	return NewHuffmanDict(DefaultDictionary).Compress(data)
+}
+
+// CompressDict compresses the given data using the given dictionary.
+func CompressDict(dict *Dictionary, data []byte) ([]byte, error) {
+	return NewHuffmanDict(dict).Compress(data)
+}
+
+// Decompress decompresses the given data using the default Teeworlds' dictionary.
+func Decompress(data []byte) ([]byte, error) {
+	return NewHuffmanDict(DefaultDictionary).Decompress(data)
+}
+
+// DecompressDict decompresses the given data using the given dictionary.
+func DecompressDict(dict *Dictionary, data []byte) ([]byte, error) {
+	return NewHuffmanDict(dict).Decompress(data)
+}
 
 type Huffman struct {
 	*Dictionary
@@ -25,7 +45,11 @@ func NewHuffmanDict(d *Dictionary) *Huffman {
 	}
 }
 
+// Decompress decompresses the given data.
 func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return []byte{}, nil
+	}
 
 	dst := []byte{}
 	srcIndex := 0
@@ -52,7 +76,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 		}
 
 		if n == nil {
-			return nil, errors.New("Failed to decompress data (node is nil).")
+			return nil, fmt.Errorf("%w: node is nil", ErrHuffmanDecompress)
 		}
 
 		if n.NumBits != 0 {
@@ -73,7 +97,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 				}
 
 				if bitcount == 0 {
-					return nil, errors.New("No more bits, decoding error")
+					return nil, fmt.Errorf("%w: no more bits", ErrHuffmanDecompress)
 				}
 			}
 		}
@@ -87,6 +111,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	return dst, nil
 }
 
+// Compress compresses the given data.
 func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 
 	srcIndex := 0
@@ -96,7 +121,7 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	dst := []byte{}
 
 	if len(data) == 0 {
-		return []byte{}, errors.New("Input empty")
+		return []byte{}, nil
 	}
 
 	symbol := data[srcIndex]
