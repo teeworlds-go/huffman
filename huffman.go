@@ -5,8 +5,8 @@ import (
 )
 
 const (
-	EOFSymbol  = 256
-	MaxSymbols = EOFSymbol
+	EofSymbol  = 256
+	MaxSymbols = EofSymbol
 )
 
 type Huffman struct {
@@ -32,7 +32,7 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	size := len(data)
 	bits := uint32(0)
 	bitcount := uint8(0)
-	eof := &huff.nodes[EOFSymbol]
+	eof := &huff.nodes[EofSymbol]
 	var n *node
 
 	for {
@@ -124,8 +124,8 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 		bitcount -= 8
 	}
 
-	bits |= huff.nodes[EOFSymbol].Bits << bitcount
-	bitcount += huff.nodes[EOFSymbol].NumBits
+	bits |= huff.nodes[EofSymbol].Bits << bitcount
+	bitcount += huff.nodes[EofSymbol].NumBits
 	for bitcount >= 8 {
 		dst = append(dst, byte(bits&0xff))
 		bits >>= 8

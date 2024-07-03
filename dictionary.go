@@ -136,7 +136,7 @@ func (d *Dictionary) constructTree(frequencyTable [MaxSymbols]uint32) {
 		n.Leafs[1] = 0xffff
 
 		ns = &nodesLeftStorage[i]
-		if i == EOFSymbol {
+		if i == EofSymbol {
 			ns.frequency = 1
 		} else {
 			ns.frequency = frequencyTable[i]
