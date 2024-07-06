@@ -1,6 +1,6 @@
 # huffman
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/teeworlds-go/huffman.svg)](https://pkg.go.dev/github.com/teeworlds-go/huffman) [![Go Report Card](https://goreportcard.com/badge/github.com/teeworlds-go/huffman)](https://goreportcard.com/report/github.com/teeworlds-go/huffman)
+[![Go Reference](https://pkg.go.dev/badge/github.com/teeworlds-go/huffman/v2.svg)](https://pkg.go.dev/github.com/teeworlds-go/huffman/v2) [![Go Report Card](https://goreportcard.com/badge/github.com/teeworlds-go/huffman/v2)](https://goreportcard.com/report/github.com/teeworlds-go/huffman/v2)
 
 Teeworlds huffman compression library.
 
@@ -8,7 +8,7 @@ Teeworlds huffman compression library.
 
 ```shell
 
-// for latest tagged released
+// for latest tagged release
 go get github.com/teeworlds-go/huffman@latest
 
 // for bleeding edge master branch version
