@@ -8,7 +8,7 @@ Teeworlds huffman compression library.
 
 ```shell
 // for latest tagged release
-go get github.com/teeworlds-go/huffman@latest
+go get github.com/teeworlds-go/huffman/v2@latest
 
 // for bleeding edge master branch version
 go get github.com/teeworlds-go/huffman@master
