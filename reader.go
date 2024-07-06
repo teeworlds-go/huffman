@@ -125,11 +125,6 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 }
 
 func (r *Reader) Reset(rr io.Reader) {
-	resetter, ok := rr.(interface{ Reset(io.Reader) })
-	if ok {
-		resetter.Reset(rr)
-		return
-	}
 
 	// bufio.Reader implements this interface
 	br, ok := rr.(io.ByteReader)
