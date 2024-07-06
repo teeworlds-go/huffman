@@ -18,9 +18,9 @@ type Reader struct {
 }
 
 // New creates a new Reader with the default Teeworlds' dictionary.
-func NewReader(w io.Reader) *Reader {
+func NewReader(r io.Reader) *Reader {
 	// pass default global dictionary that is used in Teeworlds
-	return NewReaderDict(DefaultDictionary, w)
+	return NewReaderDict(DefaultDictionary, r)
 }
 
 // NewReaderDict expects a Dictionary (index -> symbol)
@@ -124,19 +124,14 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 	return cursor, io.EOF
 }
 
-func (h *Reader) Reset(r io.Reader) {
-	resetter, ok := r.(interface{ Reset(io.Reader) })
-	if ok {
-		resetter.Reset(r)
-		return
-	}
+func (r *Reader) Reset(rr io.Reader) {
 
 	// bufio.Reader implements this interface
-	br, ok := r.(io.ByteReader)
+	br, ok := rr.(io.ByteReader)
 	if ok {
-		h.br = br
+		r.br = br
 		return
 	}
 
-	h.br = bufio.NewReaderSize(r, h.bufSize)
+	r.br = bufio.NewReaderSize(rr, r.bufSize)
 }
