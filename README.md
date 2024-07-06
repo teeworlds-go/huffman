@@ -7,7 +7,6 @@ Teeworlds huffman compression library.
 ## Installation
 
 ```shell
-
 // for latest tagged release
 go get github.com/teeworlds-go/huffman@latest
 
@@ -22,7 +21,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/teeworlds-go/huffman/v2@latest"
+
+	"github.com/teeworlds-go/huffman/v2"
 )
 
 func main() {
