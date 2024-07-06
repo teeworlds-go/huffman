@@ -32,37 +32,37 @@ func NewWriterDict(d *Dictionary, w io.Writer) *Writer {
 	return &h
 }
 
-func (h *Writer) flush() error {
+func (w *Writer) flush() error {
 	// nothing to flush
-	if len(h.buf) == 0 {
+	if len(w.buf) == 0 {
 		return nil
 	}
-	_, err := h.w.Write(h.buf)
-	h.buf = h.buf[:0]
+	_, err := w.w.Write(w.buf)
+	w.buf = w.buf[:0]
 	return err
 }
 
-func (h *Writer) flushIfFull() error {
-	if len(h.buf) < cap(h.buf) {
+func (w *Writer) flushIfFull() error {
+	if len(w.buf) < cap(w.buf) {
 		// not full yet
 		return nil
 	}
-	return h.flush()
+	return w.flush()
 }
 
-func (h *Writer) append(b byte) error {
-	h.buf = append(h.buf, b)
-	return h.flushIfFull()
+func (w *Writer) append(b byte) error {
+	w.buf = append(w.buf, b)
+	return w.flushIfFull()
 }
 
-func (h *Writer) Reset(w io.Writer) {
-	h.w = w
-	h.buf = h.buf[:0]
+func (w *Writer) Reset(rw io.Writer) {
+	w.w = rw
+	w.buf = w.buf[:0]
 }
 
 // Write compresses the pased data and writes it to the underlying writer.
 // The returned returned value is the number of uncompressed bytes that were written.
-func (h *Writer) Write(data []byte) (written int, err error) {
+func (w *Writer) Write(data []byte) (written int, err error) {
 
 	var (
 		bits     uint32
@@ -71,13 +71,13 @@ func (h *Writer) Write(data []byte) (written int, err error) {
 	)
 
 	for _, symbol := range data {
-		node = h.d.nodes[symbol]
+		node = w.d.nodes[symbol]
 
 		bits |= node.Bits << bitCount
 		bitCount += node.NumBits
 
 		for bitCount >= 8 {
-			err = h.append(byte(bits))
+			err = w.append(byte(bits))
 			if err != nil {
 				return
 			}
@@ -86,12 +86,12 @@ func (h *Writer) Write(data []byte) (written int, err error) {
 		}
 	}
 
-	nodeEOF := h.d.nodes[EofSymbol]
+	nodeEOF := w.d.nodes[EofSymbol]
 	bits |= nodeEOF.Bits << bitCount
 	bitCount += nodeEOF.NumBits
 
 	for bitCount >= 8 {
-		err = h.append(byte(bits))
+		err = w.append(byte(bits))
 		if err != nil {
 			return
 		}
@@ -100,11 +100,11 @@ func (h *Writer) Write(data []byte) (written int, err error) {
 	}
 
 	// append EOF symbol
-	err = h.append(byte(bits))
+	err = w.append(byte(bits))
 	if err != nil {
 		return 0, err
 	}
-	err = h.flush()
+	err = w.flush()
 	if err != nil {
 		return 0, err
 	}
