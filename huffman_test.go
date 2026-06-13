@@ -245,12 +245,10 @@ func BenchmarkDecompressTo(b *testing.B) {
 
 	buf := make([]byte, 0, 4096)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf, err = huff.DecompressTo(buf[:0], compressed)
 		if err != nil {
 			b.Fatal(err)
 		}
 	}
-	_ = buf
 }
