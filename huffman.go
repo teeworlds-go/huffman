@@ -50,8 +50,20 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
 	}
+	return huff.DecompressTo(nil, data)
+}
 
-	dst := []byte{}
+// DecompressTo decompresses data, APPENDING the decompressed bytes to dst and
+// returning the extended slice (like Go's append). Pass a reused buffer's
+// dst[:0] to avoid allocating a fresh output slice on every call — useful on
+// hot paths that decompress many packets (e.g. a 50Hz snapshot stream). dst may
+// be nil. huff is not modified, so a single Huffman value is safe for
+// concurrent DecompressTo calls with distinct dst buffers.
+func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return dst, nil
+	}
+
 	srcIndex := 0
 	size := len(data)
 	bits := uint32(0)
