@@ -49,76 +49,82 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 	// read from underlying reader
 
 	var (
-		cursor   = 0
-		dstEnd   = len(decompressed)
-		bits     uint32
-		bitCount uint8
-		eof      *node = &r.d.nodes[EofSymbol]
-		n        *node = nil
-		b        byte
+		cursor     = 0
+		dstEnd     = len(decompressed)
+		lut        = &r.d.decLut
+		nodes      = &r.d.nodes
+		acc        uint64
+		bitCount   uint
+		srcDrained bool
+		b          byte
 	)
 
 	for cursor = 0; cursor < dstEnd; cursor++ {
-		n = nil
-		if bitCount >= lookupTableBits {
-			n = r.d.decodeLut[bits&lookupTableMask]
-		}
-
-		for bitCount < 24 {
+		// Refill to at least 56 bits. The underlying source is an
+		// io.ByteReader, so we must not read further ahead than we consume;
+		// bytes are pulled one at a time on purpose.
+		for !srcDrained && bitCount <= 56 {
 			b, err = r.br.ReadByte()
 			if err != nil {
 				if errors.Is(err, io.EOF) {
+					srcDrained = true
 					break
 				}
 				// unexpected error, abort
 				return cursor, err
 			}
 
-			bits |= uint32(b) << bitCount
+			acc |= uint64(b) << bitCount
 			bitCount += 8
 		}
 
-		if n == nil {
-			n = r.d.decodeLut[bits&lookupTableMask]
+		entry := lut[acc&lookupTableMask]
+		codeLen := uint(entry & lutLenMask)
+
+		if codeLen != 0 {
+			// resolved straight out of the lookup table
+			if codeLen > bitCount {
+				return cursor, fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, codeLen, bitCount)
+			}
+			acc >>= codeLen
+			bitCount -= codeLen
+
+			if entry&lutEOFBit != 0 {
+				break
+			}
+			decompressed[cursor] = byte(entry >> lutSymShift)
+			continue
 		}
 
-		if n == nil {
-			return cursor, fmt.Errorf("%w: decoding error: symbol not found in lookup table: %x (masked: %x)", ErrHuffmanDecompress, bits, bits&lookupTableMask)
+		// walk the tree bit by bit from where the lookup table landed
+		if bitCount < lookupTableBits {
+			return cursor, fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, lookupTableBits, bitCount)
 		}
+		idx := entry >> lutNodeShift
+		acc >>= lookupTableBits
+		bitCount -= lookupTableBits
 
-		if n.NumBits > 0 {
-			// leaf nodes
-			bits >>= n.NumBits
-			bitCount -= n.NumBits
-		} else {
-			bits >>= lookupTableBits
-			bitCount -= lookupTableBits
+		for {
+			if bitCount == 0 {
+				return cursor, fmt.Errorf("%w: decoding error: symbol not found in tree", ErrHuffmanDecompress)
+			}
+			idx = uint32(nodes[idx].Leafs[acc&1])
+			acc >>= 1
+			bitCount--
 
-			// walk the tree bit by bit
-			for {
-				// traverse tree
-				n = &r.d.nodes[n.Leafs[bits&1]]
-
-				// remove bit
-				bitCount--
-				bits >>= 1
-
-				// check if we hit a symbol
-				if n.NumBits > 0 {
-					break
-				}
-
-				if bitCount == 0 {
-					return cursor, fmt.Errorf("%w: decoding error: symbol not found in tree", ErrHuffmanDecompress)
-				}
+			if idx >= uint32(len(nodes)) {
+				return cursor, fmt.Errorf("%w: invalid stream: walked off the tree", ErrHuffmanDecompress)
+			}
+			if nodes[idx].NumBits > 0 {
+				break
 			}
 		}
 
-		if n == eof {
+		if idx == EofSymbol {
 			break
 		}
 
-		decompressed[cursor] = n.Symbol
+		decompressed[cursor] = nodes[idx].Symbol
 	}
 
 	return cursor, io.EOF

@@ -55,20 +55,15 @@ func goldenLines(t *testing.T) []string {
 	}
 	rec("dict/nodes\t%s", hashOf(dictBuf.Bytes()))
 
-	var lutBuf bytes.Buffer
-	for i := 0; i < lookupTableSize; i++ {
-		// index of the node the LUT entry points at, plus its payload
-		n := d.decodeLut[i]
-		idx := -1
-		for j := range d.nodes {
-			if &d.nodes[j] == n {
-				idx = j
-				break
-			}
-		}
-		fmt.Fprintf(&lutBuf, "%d %d %d %d\n", i, idx, n.NumBits, n.Symbol)
+	// The symbol -> code mapping is the actual wire contract. The decode
+	// lookup table is a pure accelerator derived from the tree, so its shape
+	// (and lookupTableBits) is deliberately not pinned here; it is verified
+	// against the tree by TestDecodeLUTMatchesTree instead.
+	var codeBuf bytes.Buffer
+	for i := 0; i <= EofSymbol; i++ {
+		fmt.Fprintf(&codeBuf, "%d %d %d\n", i, d.nodes[i].Bits, d.nodes[i].NumBits)
 	}
-	rec("dict/decodeLut\t%s", hashOf(lutBuf.Bytes()))
+	rec("dict/codes\t%s", hashOf(codeBuf.Bytes()))
 
 	// 2. compressed output for every corpus entry, bit-exact.
 	huff := NewHuffman()
@@ -584,6 +579,62 @@ func TestConcurrentUse(t *testing.T) {
 	for g := 0; g < goroutines; g++ {
 		if err := <-errCh; err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// TestDecodeLUTMatchesTree verifies the flat decode table against the tree it
+// is derived from, for every possible lookupTableBits-wide bit pattern. This
+// replaces pinning the table's bytes: it checks the property that matters
+// (the accelerator agrees with the tree) and stays valid if lookupTableBits
+// is retuned for performance.
+func TestDecodeLUTMatchesTree(t *testing.T) {
+	for _, dc := range testDictionaries() {
+		d := dc.dict
+		for i := 0; i < lookupTableSize; i++ {
+			// walk the tree manually for this bit pattern
+			bits := uint32(i)
+			n := d.startNode
+			depth := 0
+			for ; depth < lookupTableBits; depth++ {
+				n = &d.nodes[n.Leafs[bits&1]]
+				bits >>= 1
+				if n.NumBits > 0 {
+					depth++
+					break
+				}
+			}
+
+			entry := d.decLut[i]
+			codeLen := int(entry & lutLenMask)
+
+			if n.NumBits > 0 {
+				// resolvable: table must report the same symbol and length
+				if codeLen != int(n.NumBits) {
+					t.Fatalf("%s: lut[%d] length %d, tree says %d", dc.name, i, codeLen, n.NumBits)
+				}
+				if codeLen != depth {
+					t.Fatalf("%s: lut[%d] length %d, walked %d bits", dc.name, i, codeLen, depth)
+				}
+				isEOF := entry&lutEOFBit != 0
+				wantEOF := n == &d.nodes[EofSymbol]
+				if isEOF != wantEOF {
+					t.Fatalf("%s: lut[%d] EOF flag %v, want %v", dc.name, i, isEOF, wantEOF)
+				}
+				if !wantEOF && byte(entry>>lutSymShift) != n.Symbol {
+					t.Fatalf("%s: lut[%d] symbol %d, tree says %d", dc.name, i, byte(entry>>lutSymShift), n.Symbol)
+				}
+			} else {
+				// not resolvable: table must point at the internal node the
+				// walk ended on
+				if codeLen != 0 {
+					t.Fatalf("%s: lut[%d] claims length %d but the tree needs a deeper walk", dc.name, i, codeLen)
+				}
+				idx := entry >> lutNodeShift
+				if int(idx) >= len(d.nodes) || &d.nodes[idx] != n {
+					t.Fatalf("%s: lut[%d] node index %d does not match the tree walk", dc.name, i, idx)
+				}
+			}
 		}
 	}
 }
