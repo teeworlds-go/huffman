@@ -1,6 +1,7 @@
 package huffman
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 )
@@ -63,51 +64,113 @@ func (w *Writer) Reset(rw io.Writer) {
 // Write compresses the pased data and writes it to the underlying writer.
 // The returned returned value is the number of uncompressed bytes that were written.
 func (w *Writer) Write(data []byte) (written int, err error) {
+	d := w.d
+
+	// Codes longer than 32 bits cannot share a 64 bit accumulator with up to
+	// 31 leftover bits. Only pathological frequency tables get there.
+	if d.maxCodeLen > 32 {
+		return w.writeDeep(data)
+	}
 
 	var (
-		bits     uint32
-		bitCount uint8
-		node     node
+		encBits  = &d.encBits
+		encLen   = &d.encLen
+		acc      uint64
+		bitCount uint
+		buf      = w.buf[:0]
 	)
 
 	for _, symbol := range data {
-		node = w.d.nodes[symbol]
+		acc |= uint64(encBits[symbol]) << bitCount
+		bitCount += uint(encLen[symbol])
 
-		bits |= node.Bits << bitCount
-		bitCount += node.NumBits
+		if bitCount >= 32 {
+			if len(buf)+4 > cap(buf) {
+				if _, err = w.w.Write(buf); err != nil {
+					w.buf = buf[:0]
+					return 0, err
+				}
+				buf = buf[:0]
+			}
+			buf = binary.LittleEndian.AppendUint32(buf, uint32(acc))
+			acc >>= 32
+			bitCount -= 32
+		}
+	}
 
+	acc |= uint64(encBits[EofSymbol]) << bitCount
+	bitCount += uint(encLen[EofSymbol])
+
+	// drain whole bytes, then the trailing partial byte
+	for bitCount >= 8 {
+		if len(buf) == cap(buf) {
+			if _, err = w.w.Write(buf); err != nil {
+				w.buf = buf[:0]
+				return 0, err
+			}
+			buf = buf[:0]
+		}
+		buf = append(buf, byte(acc))
+		acc >>= 8
+		bitCount -= 8
+	}
+	// trailing partial byte, only when bits actually remain (see Compress)
+	if bitCount != 0 {
+		if len(buf) == cap(buf) {
+			if _, err = w.w.Write(buf); err != nil {
+				w.buf = buf[:0]
+				return 0, err
+			}
+			buf = buf[:0]
+		}
+		buf = append(buf, byte(acc))
+	}
+
+	w.buf = buf
+	if err = w.flush(); err != nil {
+		return 0, err
+	}
+
+	return len(data), nil
+}
+
+// writeDeep is the fallback for dictionaries with codes longer than 32 bits.
+func (w *Writer) writeDeep(data []byte) (written int, err error) {
+	d := w.d
+
+	var (
+		bits     uint64
+		bitCount uint
+	)
+
+	emit := func(symbol int) error {
+		bits |= uint64(d.encBits[symbol]) << bitCount
+		bitCount += uint(d.encLen[symbol])
 		for bitCount >= 8 {
-			err = w.append(byte(bits))
-			if err != nil {
-				return
+			if err := w.append(byte(bits)); err != nil {
+				return err
 			}
 			bits >>= 8
 			bitCount -= 8
 		}
+		return nil
 	}
 
-	nodeEOF := w.d.nodes[EofSymbol]
-	bits |= nodeEOF.Bits << bitCount
-	bitCount += nodeEOF.NumBits
-
-	for bitCount >= 8 {
-		err = w.append(byte(bits))
-		if err != nil {
-			return
+	for _, symbol := range data {
+		if err = emit(int(symbol)); err != nil {
+			return 0, err
 		}
-		bits >>= 8
-		bitCount -= 8
 	}
-
-	// append EOF symbol
-	err = w.append(byte(bits))
-	if err != nil {
+	if err = emit(EofSymbol); err != nil {
 		return 0, err
 	}
-	err = w.flush()
-	if err != nil {
+	if bitCount != 0 {
+		if err = w.append(byte(bits)); err != nil {
+			return 0, err
+		}
+	}
+	if err = w.flush(); err != nil {
 		return 0, err
 	}
-
 	return len(data), nil
 }

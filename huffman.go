@@ -1,12 +1,17 @@
 package huffman
 
 import (
+	"encoding/binary"
 	"fmt"
 )
 
 const (
 	EofSymbol  = 256
 	MaxSymbols = EofSymbol
+
+	// maxAlloc caps buffer sizing arithmetic so that it stays well inside
+	// what an int can hold on both 32 and 64 bit platforms.
+	maxAlloc = uint64(1)<<(31+(^uint(0)>>63)*32) - 1
 )
 
 // Compress compresses the given data using the default Teeworlds' dictionary.
@@ -46,6 +51,10 @@ func NewHuffmanDict(d *Dictionary) *Huffman {
 }
 
 // Decompress decompresses the given data.
+//
+// Malformed input is always rejected in bounded time: the decoder never
+// consumes more bits than the input actually contains, so a stream that does
+// not carry an EOF symbol returns an error instead of looping forever.
 func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
@@ -64,110 +73,306 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 		return dst, nil
 	}
 
-	srcIndex := 0
-	size := len(data)
-	bits := uint32(0)
-	bitcount := uint8(0)
-	eof := &huff.nodes[EofSymbol]
-	var n *node
+	d := huff.Dictionary
+	lut := &d.decLut
+	nodes := &d.nodes
 
-	for {
-		n = nil
-		if bitcount >= lookupTableBits {
-			n = huff.decodeLut[bits&lookupTableMask]
-		}
-
-		for bitcount < 24 && srcIndex < size {
-			bits |= uint32(data[srcIndex]) << bitcount
-			srcIndex += 1
-			bitcount += 8
-		}
-
-		if n == nil {
-			n = huff.decodeLut[bits&lookupTableMask]
-		}
-
-		if n == nil {
-			return nil, fmt.Errorf("%w: node is nil", ErrHuffmanDecompress)
-		}
-
-		if n.NumBits != 0 {
-			bits >>= n.NumBits
-			bitcount -= n.NumBits
-		} else {
-			bits >>= lookupTableBits
-			bitcount -= lookupTableBits
-
-			for {
-				n = &huff.nodes[n.Leafs[bits&1]]
-
-				bitcount--
-				bits >>= 1
-
-				if n.NumBits != 0 {
-					break
-				}
-
-				if bitcount == 0 {
-					return nil, fmt.Errorf("%w: no more bits", ErrHuffmanDecompress)
-				}
-			}
-		}
-		if n == eof {
-			break
-		}
-
-		dst = append(dst, n.Symbol)
+	// Output sizing. Two competing costs: guessing low means realloc+copy,
+	// guessing high wastes memory and page faults.
+	//
+	// The hard upper bound is one symbol per input bit (a one bit code), so
+	// small inputs get that bound outright: at or below 1 KiB of input the
+	// worst case still fits in 8 KiB, which covers every teeworlds packet
+	// with exactly one allocation and no regrowth. Larger inputs fall back to
+	// a relative estimate so a 64 KiB payload does not reserve half a MiB.
+	// uint64 arithmetic throughout: on a 32 bit platform len(data)*8 would
+	// wrap for inputs above 256 MiB and hand make() a negative capacity.
+	initCap := uint64(len(data))*2 + 64
+	if initCap < 8192 {
+		initCap = 8192
+	}
+	if bound := uint64(len(data))*8 + 8; initCap > bound {
+		initCap = bound
+	}
+	if initCap > maxAlloc {
+		initCap = maxAlloc
 	}
 
-	return dst, nil
+	// Append semantics. The estimate above is deliberately generous, so it
+	// must not be used as the bar a caller's buffer has to clear: demanding
+	// it would reallocate a perfectly usable reused buffer on every call and
+	// defeat the point of DecompressTo. Only pre-grow when the spare capacity
+	// is below the compressed size, which is the point at which regrowth
+	// becomes near certain; otherwise trust the caller and let append handle
+	// the rare overflow. A fresh Decompress (dst == nil) always takes this
+	// branch and so keeps its single-allocation behaviour.
+	if uint64(cap(dst)-len(dst)) < uint64(len(data)) {
+		grown := make([]byte, len(dst), uint64(len(dst))+initCap)
+		copy(grown, dst)
+		dst = grown
+	}
+
+	var (
+		acc      uint64 // bit accumulator, LSB first
+		bitCount uint   // number of valid bits in acc
+		srcIndex int
+	)
+
+	// While the accumulator holds at least maxLen bits, any single symbol is
+	// guaranteed to be decodable without a further refill and without any
+	// per-symbol bounds check. A 56 bit refill therefore feeds 3 symbols of
+	// the default dictionary, and dozens for short-code data.
+	maxLen := uint(d.maxCodeLen)
+	if maxLen < lookupTableBits {
+		maxLen = lookupTableBits
+	}
+
+bulk:
+	// A refill guarantees 56 bits, so the unchecked bulk loop is only usable
+	// when a single code can never exceed that.
+	for maxLen <= 56 {
+		// Refill to at least 56 valid bits. The fast path loads 8 bytes at
+		// once and only claims the whole bytes it consumed; the leftover
+		// partial byte is simply re-read on the next refill.
+		if srcIndex+8 <= len(data) {
+			acc |= binary.LittleEndian.Uint64(data[srcIndex:]) << bitCount
+			srcIndex += int(63-bitCount) >> 3
+			bitCount |= 56
+		} else {
+			for bitCount < 56 && srcIndex < len(data) {
+				acc |= uint64(data[srcIndex]) << bitCount
+				srcIndex++
+				bitCount += 8
+			}
+			if bitCount < maxLen {
+				// input exhausted, finish under full bit-availability checks
+				break bulk
+			}
+		}
+
+		for bitCount >= maxLen {
+			entry := lut[acc&lookupTableMask]
+			codeLen := uint(entry & lutLenMask)
+
+			if codeLen != 0 {
+				acc >>= codeLen
+				bitCount -= codeLen
+				if entry&lutEOFBit != 0 {
+					return dst, nil
+				}
+				dst = append(dst, byte(entry>>lutSymShift))
+				continue
+			}
+
+			// Not resolvable within lookupTableBits: consume those bits and
+			// walk the tree from the node the table landed on. The walk is
+			// bounded by maxLen total bits, which we know we have.
+			idx := entry >> lutNodeShift
+			acc >>= lookupTableBits
+			bitCount -= lookupTableBits
+
+			for {
+				idx = uint32(nodes[idx].Leafs[acc&1])
+				acc >>= 1
+				bitCount--
+
+				if idx >= uint32(len(nodes)) {
+					return nil, fmt.Errorf("%w: invalid stream: walked off the tree", ErrHuffmanDecompress)
+				}
+				if nodes[idx].NumBits != 0 {
+					break
+				}
+			}
+
+			if idx == EofSymbol {
+				return dst, nil
+			}
+			dst = append(dst, nodes[idx].Symbol)
+		}
+	}
+
+	// Tail: fewer than maxLen bits remain, so every consumption has to be
+	// checked against what the input actually provided. This is what makes a
+	// stream without an EOF symbol terminate with an error instead of
+	// spinning forever on zero padding.
+	for {
+		for bitCount < 56 && srcIndex < len(data) {
+			acc |= uint64(data[srcIndex]) << bitCount
+			srcIndex++
+			bitCount += 8
+		}
+
+		entry := lut[acc&lookupTableMask]
+		codeLen := uint(entry & lutLenMask)
+
+		if codeLen != 0 {
+			if codeLen > bitCount {
+				return nil, fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, codeLen, bitCount)
+			}
+			acc >>= codeLen
+			bitCount -= codeLen
+			if entry&lutEOFBit != 0 {
+				return dst, nil
+			}
+			dst = append(dst, byte(entry>>lutSymShift))
+			continue
+		}
+
+		if bitCount < lookupTableBits {
+			return nil, fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, lookupTableBits, bitCount)
+		}
+		idx := entry >> lutNodeShift
+		acc >>= lookupTableBits
+		bitCount -= lookupTableBits
+
+		for {
+			if bitCount == 0 {
+				return nil, fmt.Errorf("%w: truncated stream: symbol not terminated", ErrHuffmanDecompress)
+			}
+			idx = uint32(nodes[idx].Leafs[acc&1])
+			acc >>= 1
+			bitCount--
+
+			if idx >= uint32(len(nodes)) {
+				return nil, fmt.Errorf("%w: invalid stream: walked off the tree", ErrHuffmanDecompress)
+			}
+			if nodes[idx].NumBits != 0 {
+				break
+			}
+		}
+
+		if idx == EofSymbol {
+			return dst, nil
+		}
+		dst = append(dst, nodes[idx].Symbol)
+	}
 }
 
 // Compress compresses the given data.
+//
+// Empty input is not a special case: it compresses to the EOF symbol alone,
+// which is what teeworlds 0.7 and ddnet both emit and what their decoders
+// require. Returning an empty slice here would produce a stream neither of
+// them can decode.
 func (huff *Huffman) Compress(data []byte) ([]byte, error) {
+	d := huff.Dictionary
 
-	srcIndex := 0
-	end := len(data)
-	bits := uint32(0)
-	bitcount := uint8(0)
-	dst := []byte{}
-
-	if len(data) == 0 {
-		return []byte{}, nil
+	// A code longer than 32 bits cannot be accumulated together with up to 31
+	// leftover bits in a 64 bit register. Only absurdly skewed frequency
+	// tables reach that depth; the default dictionary tops out at 15 bits.
+	if d.maxCodeLen > 32 {
+		return huff.compressDeep(data)
 	}
 
-	symbol := data[srcIndex]
-	srcIndex++
+	encBits := &d.encBits
+	encLen := &d.encLen
 
-	for srcIndex < end {
-		bits |= huff.nodes[symbol].Bits << bitcount
-		bitcount += huff.nodes[symbol].NumBits
+	// Exact worst case: every symbol at the longest code, plus the EOF code
+	// and the final partial byte. Sizing up front removes every bounds check
+	// and every realloc from the hot loop.
+	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
+	size := maxBits/8 + 8
+	if size > maxAlloc {
+		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
+	}
+	dst := make([]byte, int(size))
 
-		symbol = data[srcIndex]
-		srcIndex++
+	var (
+		acc      uint64
+		bitCount uint
+		pos      int
+	)
 
-		for bitcount >= 8 {
-			dst = append(dst, byte(bits&0xff))
-			bits >>= 8
-			bitcount -= 8
+	for _, symbol := range data {
+		acc |= uint64(encBits[symbol]) << bitCount
+		bitCount += uint(encLen[symbol])
+
+		if bitCount >= 32 {
+			binary.LittleEndian.PutUint32(dst[pos:], uint32(acc))
+			pos += 4
+			acc >>= 32
+			bitCount -= 32
 		}
 	}
 
-	bits |= huff.nodes[symbol].Bits << bitcount
-	bitcount += huff.nodes[symbol].NumBits
-	for bitcount >= 8 {
-		dst = append(dst, byte(bits&0xff))
-		bits >>= 8
-		bitcount -= 8
+	acc |= uint64(encBits[EofSymbol]) << bitCount
+	bitCount += uint(encLen[EofSymbol])
+
+	for bitCount >= 8 {
+		dst[pos] = byte(acc)
+		pos++
+		acc >>= 8
+		bitCount -= 8
+	}
+	// Trailing partial byte, only when bits actually remain. Teeworlds 0.7
+	// and older ddnet always wrote this byte even when empty; ddnet dropped
+	// the redundant zero byte in 4354f8c6. It sits after the EOF symbol, so
+	// every decoder ignores it either way.
+	if bitCount != 0 {
+		dst[pos] = byte(acc)
+		pos++
 	}
 
-	bits |= huff.nodes[EofSymbol].Bits << bitcount
-	bitcount += huff.nodes[EofSymbol].NumBits
-	for bitcount >= 8 {
-		dst = append(dst, byte(bits&0xff))
-		bits >>= 8
-		bitcount -= 8
+	// The worst-case buffer is ~1.9x the real output for the default
+	// dictionary. Hand back a right-sized slice when we overshot badly,
+	// rather than pinning the oversized array in the caller's heap -- but
+	// only when the waste justifies a second allocation plus a copy. Packet
+	// sized payloads stay at exactly one allocation.
+	if len(dst)-pos > 8192 && pos*2 < len(dst) {
+		out := make([]byte, pos)
+		copy(out, dst[:pos])
+		return out, nil
 	}
-	dst = append(dst, byte(bits))
-	return dst, nil
+	return dst[:pos], nil
+}
+
+// compressDeep is the fallback for dictionaries whose codes exceed 32 bits.
+// It drains the accumulator down to a single partial byte before adding the
+// next code, so it is correct for code lengths up to 56 bits at the cost of
+// an extra inner loop.
+func (huff *Huffman) compressDeep(data []byte) ([]byte, error) {
+	d := huff.Dictionary
+	encBits := &d.encBits
+	encLen := &d.encLen
+
+	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
+	size := maxBits/8 + 8
+	if size > maxAlloc {
+		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
+	}
+	dst := make([]byte, int(size))
+
+	var (
+		acc      uint64
+		bitCount uint
+		pos      int
+	)
+
+	emit := func(symbol int) {
+		acc |= uint64(encBits[symbol]) << bitCount
+		bitCount += uint(encLen[symbol])
+		for bitCount >= 8 {
+			dst[pos] = byte(acc)
+			pos++
+			acc >>= 8
+			bitCount -= 8
+		}
+	}
+
+	for _, symbol := range data {
+		emit(int(symbol))
+	}
+	emit(EofSymbol)
+
+	if bitCount != 0 {
+		dst[pos] = byte(acc)
+		pos++
+	}
+
+	if len(dst)-pos > 8192 && pos*2 < len(dst) {
+		out := make([]byte, pos)
+		copy(out, dst[:pos])
+		return out, nil
+	}
+	return dst[:pos], nil
 }
