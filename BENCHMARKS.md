@@ -107,3 +107,60 @@ these numbers there.
 - Encoder uses flat encode tables, flushes 4 bytes at a time, and sizes its
   output up front so the hot loop has no reallocation.
 - `Writer`/`Reader` share the same tables and accumulator strategy.
+
+## Cross-implementation: ddnet master (C++) vs this library (Go)
+
+Against ddnet `master` HEAD, `src/engine/shared/huffman.cpp` compiled
+**verbatim** (only `base/dbg.h` and `base/mem.h` stubbed), Apple clang 21,
+`-O3 -DNDEBUG`, same machine, same corpora, binaries run alternately for six
+rounds each.
+
+Validity check first: **both implementations produce byte-identical compressed
+output on all nine corpora**, and ddnet's bytes round-trip through our decoder.
+So both decoders consume exactly the same input.
+
+### Encode
+
+The two APIs differ in shape: ddnet's `Compress` writes into a caller-supplied
+buffer and never allocates, ours returns a fresh slice. Both are reported.
+
+| Encoder | geomean | vs ddnet |
+| ------------------------------------- | --------- | ---------- |
+| ddnet `Compress` (caller buffer)       | 9.06 µs   | baseline   |
+| ours `Compress` (allocates result)     | 10.24 µs  | +12.9%     |
+| ours `Writer` (reuses buffer)          | 6.45 µs   | **-28.8%** |
+
+Like for like — both writing into a reused buffer — the Go encoder is **28.8%
+faster than the C++ one**. The gap in the middle row is the cost of allocating
+a result slice per call, which is an API choice, not a codec difference.
+
+Per case, `Writer` vs ddnet: snapshot/1400B -44.6%, skewed/64KB -47.8%,
+zeroes/64KB -49.2%, text/64KB -16.6%, snapshot/64KB ~, random/64KB +32.0%.
+
+### Decode
+
+| | ddnet | ours | delta |
+| ----------------- | -------- | -------- | ---------- |
+| snapshot/1400B    | 3.95 µs  | 3.54 µs  | **-10.4%** |
+| snapshot/64KB     | 242.0 µs | 171.9 µs | **-28.9%** |
+| random/64KB       | 563.0 µs | 259.3 µs | **-54.0%** |
+| text/64KB         | 204.1 µs | 150.6 µs | **-26.2%** |
+| zeroes/64KB       | 87.5 µs  | 101.0 µs | +15.5%     |
+| skewed/64KB       | 87.2 µs  | 119.2 µs | +36.6%     |
+| **geomean**       | 21.6 µs  | 20.2 µs  | **-6.4%**  |
+
+The wins are where codes are long and ddnet falls back to bit-by-bit tree
+walks — our 12-bit flat table resolves those in one load. The losses are on
+degenerate short-code payloads (`zeroes`, `skewed` are ~1 bit per symbol),
+where there is little to accelerate and ddnet's tighter loop wins. Measured
+with an exact-size output buffer, only ~5% of the `zeroes` gap is allocation,
+so this is genuine codec cost rather than an artefact of our allocating API.
+
+### Summary
+
+Roughly at parity with the C++ implementation overall, ahead on both halves
+once the API shapes are matched: **-28.8% encode** buffer-to-buffer and
+**-6.4% decode**, with the largest single win (-54%) on high-entropy payloads.
+Note ddnet only optimized its encoder in #12519; its decoder is still the
+classic 10-bit pointer-table version, which is where most of our decode
+advantage comes from.
