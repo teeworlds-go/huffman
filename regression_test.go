@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -208,8 +209,9 @@ func testDictionaries() []namedDict {
 		skewed[i] = 1
 	}
 	skewed[0] = 1 << 30
-	// fibonacci: deliberately produces the deepest legal tree, i.e. the
-	// longest possible codes. This is what overflows a 32 bit accumulator.
+	// fibonacci: deliberately produces long but still uint32-representable
+	// codes. This is what overflowed the old 32 bit accumulator when combined
+	// with leftover bits.
 	var fib [MaxSymbols]uint32
 	a, b := uint32(1), uint32(1)
 	for i := range fib {
@@ -282,6 +284,37 @@ func TestLongCodesRoundtrip(t *testing.T) {
 	}
 }
 
+// TestUnsupportedDeepDictionaryIsRejected covers frequency tables whose
+// generated codes cannot be represented by the dictionary's uint32 code
+// storage. Zero frequencies deliberately produce a maximally skewed tree.
+// Such a dictionary must fail explicitly instead of silently emitting a
+// corrupt stream from the nominal "deep" encoder path.
+func TestUnsupportedDeepDictionaryIsRejected(t *testing.T) {
+	var zero [MaxSymbols]uint32
+	d := NewDictionaryWithFrequencies(zero)
+	if d.maxCodeLen <= maxStoredCodeBits {
+		t.Fatalf("zero-frequency dictionary max code length = %d, want > %d", d.maxCodeLen, maxStoredCodeBits)
+	}
+
+	huff := NewHuffmanDict(d)
+	if _, err := huff.Compress([]byte{0}); err == nil {
+		t.Fatal("Compress accepted a dictionary with codes wider than uint32")
+	}
+	if _, err := huff.Decompress([]byte{0}); err == nil {
+		t.Fatal("Decompress accepted a dictionary with codes wider than uint32")
+	}
+
+	var compressed bytes.Buffer
+	w := NewWriterDict(d, &compressed)
+	if _, err := w.Write([]byte{0}); err == nil {
+		t.Fatal("Writer accepted a dictionary with codes wider than uint32")
+	}
+	r := NewReaderDict(d, bytes.NewReader([]byte{0}))
+	if _, err := r.Read(make([]byte, 1)); err == nil {
+		t.Fatal("Reader accepted a dictionary with codes wider than uint32")
+	}
+}
+
 // TestWriterMatchesCompress: the streaming Writer must emit exactly what the
 // one-shot Compress emits.
 func TestWriterMatchesCompress(t *testing.T) {
@@ -304,6 +337,24 @@ func TestWriterMatchesCompress(t *testing.T) {
 			if !bytes.Equal(buf.Bytes(), want) {
 				t.Fatalf("%s/%s: Writer output differs from Compress\n got %x\nwant %x", dc.name, e.name, buf.Bytes(), want)
 			}
+		}
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) {
+	return len(p) / 2, nil
+}
+
+func TestWriterReportsShortWrite(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte("must not be silently truncated"),
+		bytes.Repeat([]byte{0xff}, 4096),
+	} {
+		w := NewWriter(shortWriter{})
+		if n, err := w.Write(payload); n != 0 || !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("Writer.Write(%d bytes) = (%d, %v), want (0, io.ErrShortWrite)", len(payload), n, err)
 		}
 	}
 }
@@ -352,6 +403,38 @@ func TestReaderShortBuffer(t *testing.T) {
 		if !bytes.Equal(dst[:n], data[:n]) {
 			t.Fatalf("size=%d: prefix mismatch", size)
 		}
+	}
+}
+
+// TestReaderContinuesAfterShortBuffer exercises Reader as an actual
+// io.Reader: filling p before reaching the Huffman EOF symbol must return a
+// non-terminal read and preserve the bit accumulator for the next call.
+func TestReaderContinuesAfterShortBuffer(t *testing.T) {
+	data := snapshotLike(22, 1000)
+	compressed, err := Compress(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewReader(bytes.NewReader(compressed))
+	var got []byte
+	buf := make([]byte, 7)
+	for {
+		n, err := r.Read(buf)
+		got = append(got, buf[:n]...)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Read after %d output bytes: %v", len(got), err)
+		}
+		if n == 0 {
+			t.Fatal("Reader made no progress before EOF")
+		}
+	}
+
+	if !bytes.Equal(got, data) {
+		t.Fatalf("Reader with short buffers returned %d bytes, want %d", len(got), len(data))
 	}
 }
 
@@ -457,6 +540,51 @@ func TestReaderMalformedNoPanic(t *testing.T) {
 			_, _ = r.Read(dst)
 		}()
 	}
+}
+
+// FuzzMalformedDecodersBounded feeds arbitrary network-style bytes through
+// both decoder APIs. Panics are reported by the fuzzing engine; the explicit
+// bound also ensures malformed input cannot make either decoder invent more
+// than one output symbol per supplied bit.
+func FuzzMalformedDecodersBounded(f *testing.F) {
+	for _, seed := range [][]byte{
+		nil,
+		{0x00},
+		{0xff},
+		{0x1a},
+		{0x62, 0x91, 0x62, 0xa9},
+		{0x4c, 0x04, 0xfe, 0x00, 0x68},
+		bytes.Repeat([]byte{0xff}, 64),
+		bytes.Repeat([]byte{0x00}, 64),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		bound := uint64(len(data))*8 + 1
+		huff := NewHuffman()
+		out, _ := huff.Decompress(data)
+		if uint64(len(out)) > bound {
+			t.Fatalf("Decompress produced %d bytes from %d input bytes (bound %d)", len(out), len(data), bound)
+		}
+
+		r := NewReader(bytes.NewReader(data))
+		buf := make([]byte, 7)
+		var total uint64
+		for {
+			n, err := r.Read(buf)
+			total += uint64(n)
+			if total > bound {
+				t.Fatalf("Reader produced %d bytes from %d input bytes (bound %d)", total, len(data), bound)
+			}
+			if err != nil {
+				break
+			}
+			if n == 0 {
+				t.Fatal("Reader made no progress before a terminal result")
+			}
+		}
+	})
 }
 
 // TestWriterReset / TestReaderReset pin reuse semantics.

@@ -77,6 +77,27 @@ func TestCompressRefusesOversizedOn32Bit(t *testing.T) {
 	}
 }
 
+// The same helpers also run on 64 bit hosts. Extremely large slices are not
+// practically allocatable, but the arithmetic must still reject an
+// unrepresentable result instead of wrapping to a small, apparently safe
+// allocation size.
+func TestSizingDoesNotWrapOn64Bit(t *testing.T) {
+	if ^uint(0)>>63 == 0 {
+		t.Skip("requires a 64 bit int")
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if got := decompressInitCap(maxInt, maxAlloc64); got != maxAlloc64 {
+		t.Errorf("decompressInitCap(MaxInt) = %d, want saturated %d", got, maxAlloc64)
+	}
+	if size, ok := compressBufSize(maxInt, 255, maxAlloc64); ok {
+		t.Errorf("compressBufSize(MaxInt, 255) = %d, want overflow rejection", size)
+	}
+	if got := growCap(maxInt, maxAlloc64, maxAlloc64); got != maxAlloc64 {
+		t.Errorf("growCap(MaxInt, MaxInt) = %d, want saturated %d", got, maxAlloc64)
+	}
+}
+
 const maxAlloc64 = uint64(math.MaxInt64)
 
 // TestMaxAllocMatchesPlatform documents what maxAlloc resolves to here. The
