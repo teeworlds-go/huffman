@@ -122,6 +122,24 @@ func testWriteAndCompareWithCompress(t *testing.T, data []byte) {
 		t.Fatalf("error compressing: %v", err)
 	}
 
+	if len(data) == 0 {
+		// io.Copy never calls Write for an empty source (bytes.Reader.WriteTo
+		// returns early), so no frame is emitted at all. Compress on the
+		// other hand always emits the EOF symbol. Compare against an explicit
+		// Write instead, which is the streaming equivalent of Compress.
+		var buf bytes.Buffer
+		if _, err := NewWriter(&buf).Write(data); err != nil {
+			t.Fatalf("error writing empty: %v", err)
+		}
+		if !bytes.Equal(compressed, buf.Bytes()) {
+			t.Fatalf("empty input: Compress gave %v, explicit Write gave %v", compressed, buf.Bytes())
+		}
+		if compressedStream.Len() != 0 {
+			t.Fatalf("empty input: expected no output from io.Copy, got %v", compressedStream.Bytes())
+		}
+		return
+	}
+
 	if !bytes.Equal(compressed, compressedStream.Bytes()) {
 		t.Fatalf("expected %v(%s), got %v(%s)", compressed, string(compressed), compressedStream.Bytes(), compressedStream.String())
 	}

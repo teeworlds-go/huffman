@@ -114,14 +114,17 @@ func (w *Writer) Write(data []byte) (written int, err error) {
 		acc >>= 8
 		bitCount -= 8
 	}
-	if len(buf) == cap(buf) {
-		if _, err = w.w.Write(buf); err != nil {
-			w.buf = buf[:0]
-			return 0, err
+	// trailing partial byte, only when bits actually remain (see Compress)
+	if bitCount != 0 {
+		if len(buf) == cap(buf) {
+			if _, err = w.w.Write(buf); err != nil {
+				w.buf = buf[:0]
+				return 0, err
+			}
+			buf = buf[:0]
 		}
-		buf = buf[:0]
+		buf = append(buf, byte(acc))
 	}
-	buf = append(buf, byte(acc))
 
 	w.buf = buf
 	if err = w.flush(); err != nil {
@@ -161,8 +164,10 @@ func (w *Writer) writeDeep(data []byte) (written int, err error) {
 	if err = emit(EofSymbol); err != nil {
 		return 0, err
 	}
-	if err = w.append(byte(bits)); err != nil {
-		return 0, err
+	if bitCount != 0 {
+		if err = w.append(byte(bits)); err != nil {
+			return 0, err
+		}
 	}
 	if err = w.flush(); err != nil {
 		return 0, err

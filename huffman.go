@@ -223,11 +223,12 @@ bulk:
 }
 
 // Compress compresses the given data.
+//
+// Empty input is not a special case: it compresses to the EOF symbol alone,
+// which is what teeworlds 0.7 and ddnet both emit and what their decoders
+// require. Returning an empty slice here would produce a stream neither of
+// them can decode.
 func (huff *Huffman) Compress(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return []byte{}, nil
-	}
-
 	d := huff.Dictionary
 
 	// A code longer than 32 bits cannot be accumulated together with up to 31
@@ -277,9 +278,14 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 		acc >>= 8
 		bitCount -= 8
 	}
-	// trailing partial byte, always emitted to match the reference encoder
-	dst[pos] = byte(acc)
-	pos++
+	// Trailing partial byte, only when bits actually remain. Teeworlds 0.7
+	// and older ddnet always wrote this byte even when empty; ddnet dropped
+	// the redundant zero byte in 4354f8c6. It sits after the EOF symbol, so
+	// every decoder ignores it either way.
+	if bitCount != 0 {
+		dst[pos] = byte(acc)
+		pos++
+	}
 
 	// The worst-case buffer is ~1.9x the real output for the default
 	// dictionary. Hand back a right-sized slice when we overshot badly,
@@ -332,8 +338,10 @@ func (huff *Huffman) compressDeep(data []byte) ([]byte, error) {
 	}
 	emit(EofSymbol)
 
-	dst[pos] = byte(acc)
-	pos++
+	if bitCount != 0 {
+		dst[pos] = byte(acc)
+		pos++
+	}
 
 	if len(dst)-pos > 8192 && pos*2 < len(dst) {
 		out := make([]byte, pos)

@@ -288,9 +288,6 @@ func TestWriterMatchesCompress(t *testing.T) {
 	for _, dc := range testDictionaries() {
 		huff := NewHuffmanDict(dc.dict)
 		for _, e := range regressionCorpus() {
-			if len(e.data) == 0 {
-				continue // Compress short-circuits empty, Writer still frames EOF
-			}
 			want, err := huff.Compress(e.data)
 			if err != nil {
 				t.Fatalf("%s/%s: compress: %v", dc.name, e.name, err)
@@ -317,9 +314,6 @@ func TestReaderMatchesDecompress(t *testing.T) {
 	for _, dc := range testDictionaries() {
 		huff := NewHuffmanDict(dc.dict)
 		for _, e := range regressionCorpus() {
-			if len(e.data) == 0 {
-				continue
-			}
 			compressed, err := huff.Compress(e.data)
 			if err != nil {
 				t.Fatalf("%s/%s: compress: %v", dc.name, e.name, err)
