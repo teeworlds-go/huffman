@@ -8,6 +8,10 @@ import (
 const (
 	EofSymbol  = 256
 	MaxSymbols = EofSymbol
+
+	// maxAlloc caps buffer sizing arithmetic so that it stays well inside
+	// what an int can hold on both 32 and 64 bit platforms.
+	maxAlloc = uint64(1)<<(31+(^uint(0)>>63)*32) - 1
 )
 
 // Compress compresses the given data using the default Teeworlds' dictionary.
@@ -68,14 +72,19 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	// worst case still fits in 8 KiB, which covers every teeworlds packet
 	// with exactly one allocation and no regrowth. Larger inputs fall back to
 	// a relative estimate so a 64 KiB payload does not reserve half a MiB.
-	initCap := len(data)*2 + 64
+	// uint64 arithmetic throughout: on a 32 bit platform len(data)*8 would
+	// wrap for inputs above 256 MiB and hand make() a negative capacity.
+	initCap := uint64(len(data))*2 + 64
 	if initCap < 8192 {
 		initCap = 8192
 	}
-	if bound := len(data)*8 + 8; initCap > bound {
+	if bound := uint64(len(data))*8 + 8; initCap > bound {
 		initCap = bound
 	}
-	dst := make([]byte, 0, initCap)
+	if initCap > maxAlloc {
+		initCap = maxAlloc
+	}
+	dst := make([]byte, 0, int(initCap))
 
 	var (
 		acc      uint64 // bit accumulator, LSB first
@@ -234,8 +243,12 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	// Exact worst case: every symbol at the longest code, plus the EOF code
 	// and the final partial byte. Sizing up front removes every bounds check
 	// and every realloc from the hot loop.
-	maxBits := (len(data)+1)*int(d.maxCodeLen) + 8
-	dst := make([]byte, maxBits/8+8)
+	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
+	size := maxBits/8 + 8
+	if size > maxAlloc {
+		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
+	}
+	dst := make([]byte, int(size))
 
 	var (
 		acc      uint64
@@ -290,8 +303,12 @@ func (huff *Huffman) compressDeep(data []byte) ([]byte, error) {
 	encBits := &d.encBits
 	encLen := &d.encLen
 
-	maxBits := (len(data)+1)*int(d.maxCodeLen) + 8
-	dst := make([]byte, maxBits/8+8)
+	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
+	size := maxBits/8 + 8
+	if size > maxAlloc {
+		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
+	}
+	dst := make([]byte, int(size))
 
 	var (
 		acc      uint64
