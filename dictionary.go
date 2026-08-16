@@ -3,7 +3,8 @@ package huffman
 import "sort"
 
 const (
-	maxNodes = (MaxSymbols)*2 + 1 // +1 for additional EOF symbol
+	maxNodes          = (MaxSymbols)*2 + 1 // +1 for additional EOF symbol
+	maxStoredCodeBits = 32                 // node.Bits and encBits are uint32
 
 	// lookupTableBits controls how many bits the decoder can resolve with a
 	// single table load; anything longer falls back to a bit-by-bit tree
@@ -51,7 +52,7 @@ var (
 // Decode LUT entry layout.
 //
 // The decoder's inner loop reads one uint32 per symbol instead of chasing a
-// *node pointer into a 12 byte struct. The whole table is 4 KiB and stays
+// *node pointer into a 12 byte struct. The whole table is 16 KiB and stays
 // resident in L1, which is the single biggest win in the decoder.
 //
 //	bits  0..5  code length in bits, 0 means "not resolvable within
@@ -87,9 +88,9 @@ type Dictionary struct {
 	startNode *node
 	numNodes  uint16
 
-	// maxCodeLen is the longest code this dictionary can emit. The encoder
-	// uses it to size its output buffer exactly and to pick a bit
-	// accumulator strategy that cannot overflow.
+	// maxCodeLen is the longest code this dictionary can emit. The codec uses
+	// it to size output buffers and reject trees wider than its uint32 code
+	// storage can represent.
 	maxCodeLen uint8
 }
 

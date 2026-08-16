@@ -14,6 +14,21 @@ const (
 	maxAlloc = uint64(1)<<(31+(^uint(0)>>63)*32) - 1
 )
 
+// Compile-time assertions about the sizing arithmetic. These are checked by
+// simply building for a target, so `GOARCH=386 go build` verifies the 32 bit
+// case without needing 32 bit hardware to run on.
+const (
+	// maxAlloc must be representable as an int, otherwise every int(size)
+	// conversion guarded by it could wrap. Underflows and fails to compile
+	// if maxAlloc ever exceeds the platform's MaxInt.
+	_ = uint64(^uint(0)>>1) - maxAlloc
+
+	// and it must be exactly MaxInt, not merely below it, so the guards are
+	// as permissive as the platform allows. Fails to compile if maxAlloc is
+	// smaller than MaxInt.
+	_ = maxAlloc - uint64(^uint(0)>>1)
+)
+
 // Compress compresses the given data using the default Teeworlds' dictionary.
 func Compress(data []byte) ([]byte, error) {
 	return NewHuffmanDict(DefaultDictionary).Compress(data)
@@ -74,6 +89,9 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	}
 
 	d := huff.Dictionary
+	if d.maxCodeLen > maxStoredCodeBits {
+		return nil, fmt.Errorf("%w: dictionary contains %d-bit codes, maximum supported is %d", ErrHuffmanDecompress, d.maxCodeLen, maxStoredCodeBits)
+	}
 	lut := &d.decLut
 	nodes := &d.nodes
 
@@ -87,16 +105,7 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	// a relative estimate so a 64 KiB payload does not reserve half a MiB.
 	// uint64 arithmetic throughout: on a 32 bit platform len(data)*8 would
 	// wrap for inputs above 256 MiB and hand make() a negative capacity.
-	initCap := uint64(len(data))*2 + 64
-	if initCap < 8192 {
-		initCap = 8192
-	}
-	if bound := uint64(len(data))*8 + 8; initCap > bound {
-		initCap = bound
-	}
-	if initCap > maxAlloc {
-		initCap = maxAlloc
-	}
+	initCap := decompressInitCap(len(data), maxAlloc)
 
 	// Append semantics. The estimate above is deliberately generous, so it
 	// must not be used as the bar a caller's buffer has to clear: demanding
@@ -107,7 +116,12 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	// the rare overflow. A fresh Decompress (dst == nil) always takes this
 	// branch and so keeps its single-allocation behaviour.
 	if uint64(cap(dst)-len(dst)) < uint64(len(data)) {
-		grown := make([]byte, len(dst), uint64(len(dst))+initCap)
+		// Clamp the total, not just initCap: on a 32 bit platform len(dst)
+		// can already be close to the int limit, and make() panics rather
+		// than failing gracefully if the capacity is not representable.
+		// Clamping only costs a later append growth in a case that is about
+		// to run out of address space anyway.
+		grown := make([]byte, len(dst), int(growCap(len(dst), initCap, maxAlloc)))
 		copy(grown, dst)
 		dst = grown
 	}
@@ -134,7 +148,7 @@ bulk:
 		// Refill to at least 56 valid bits. The fast path loads 8 bytes at
 		// once and only claims the whole bytes it consumed; the leftover
 		// partial byte is simply re-read on the next refill.
-		if srcIndex+8 <= len(data) {
+		if len(data)-srcIndex >= 8 {
 			acc |= binary.LittleEndian.Uint64(data[srcIndex:]) << bitCount
 			srcIndex += int(63-bitCount) >> 3
 			bitCount |= 56
@@ -257,11 +271,11 @@ bulk:
 func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	d := huff.Dictionary
 
-	// A code longer than 32 bits cannot be accumulated together with up to 31
-	// leftover bits in a 64 bit register. Only absurdly skewed frequency
-	// tables reach that depth; the default dictionary tops out at 15 bits.
-	if d.maxCodeLen > 32 {
-		return huff.compressDeep(data)
+	// Codes are stored as uint32 in Dictionary. Reject deeper custom trees
+	// explicitly instead of silently truncating their codes and emitting a
+	// corrupt stream. The default Teeworlds dictionary tops out at 15 bits.
+	if d.maxCodeLen > maxStoredCodeBits {
+		return nil, fmt.Errorf("%w: dictionary contains %d-bit codes, maximum supported is %d", ErrHuffmanCompress, d.maxCodeLen, maxStoredCodeBits)
 	}
 
 	encBits := &d.encBits
@@ -270,9 +284,8 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	// Exact worst case: every symbol at the longest code, plus the EOF code
 	// and the final partial byte. Sizing up front removes every bounds check
 	// and every realloc from the hot loop.
-	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
-	size := maxBits/8 + 8
-	if size > maxAlloc {
+	size, ok := compressBufSize(len(data), d.maxCodeLen, maxAlloc)
+	if !ok {
 		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
 	}
 	dst := make([]byte, int(size))
@@ -318,7 +331,7 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	// rather than pinning the oversized array in the caller's heap -- but
 	// only when the waste justifies a second allocation plus a copy. Packet
 	// sized payloads stay at exactly one allocation.
-	if len(dst)-pos > 8192 && pos*2 < len(dst) {
+	if len(dst)-pos > 8192 && uint64(pos)*2 < uint64(len(dst)) {
 		out := make([]byte, pos)
 		copy(out, dst[:pos])
 		return out, nil
@@ -326,53 +339,64 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	return dst[:pos], nil
 }
 
-// compressDeep is the fallback for dictionaries whose codes exceed 32 bits.
-// It drains the accumulator down to a single partial byte before adding the
-// next code, so it is correct for code lengths up to 56 bits at the cost of
-// an extra inner loop.
-func (huff *Huffman) compressDeep(data []byte) ([]byte, error) {
-	d := huff.Dictionary
-	encBits := &d.encBits
-	encLen := &d.encLen
+// Buffer sizing arithmetic, kept in one place and parameterised by limit (the
+// platform's maxAlloc) so the 32 bit behaviour is unit-testable on any host.
+// All of it runs in uint64: on a 32 bit platform len(data)*8 would wrap and
+// hand make() a nonsensical size.
 
-	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
+// decompressInitCap estimates the output capacity for a compressed payload of
+// inputLen bytes. Guessing low costs realloc+copy, guessing high wastes
+// memory, so small inputs get the hard upper bound of one symbol per input bit
+// (which still fits in 8 KiB at or below 1 KiB of input, covering every
+// teeworlds packet in a single allocation) and larger ones a relative estimate.
+func decompressInitCap(inputLen int, limit uint64) uint64 {
+	n := uint64(inputLen)
+	maxUint64 := ^uint64(0)
+	initCap := maxUint64
+	if n <= (maxUint64-64)/2 {
+		initCap = n*2 + 64
+	}
+	if initCap < 8192 {
+		initCap = 8192
+	}
+	bound := maxUint64
+	if n <= (maxUint64-8)/8 {
+		bound = n*8 + 8
+	}
+	if initCap > bound {
+		initCap = bound
+	}
+	if initCap > limit {
+		initCap = limit
+	}
+	return initCap
+}
+
+// growCap is the capacity for a buffer that already holds dstLen bytes and
+// wants initCap more. The total is clamped, not just initCap: on a 32 bit
+// platform dstLen alone can be close to the int limit and make() panics rather
+// than failing gracefully on a capacity it cannot represent.
+func growCap(dstLen int, initCap, limit uint64) uint64 {
+	base := uint64(dstLen)
+	if base >= limit || initCap >= limit-base {
+		return limit
+	}
+	return base + initCap
+}
+
+// compressBufSize is the exact worst case output size for inputLen bytes:
+// every symbol at the longest code, plus the EOF code and a final partial
+// byte. Reports false when that cannot be represented on this platform.
+func compressBufSize(inputLen int, maxCodeLen uint8, limit uint64) (uint64, bool) {
+	symbols := uint64(inputLen) + 1
+	codeLen := uint64(maxCodeLen)
+	if codeLen != 0 && symbols > (^uint64(0)-8)/codeLen {
+		return 0, false
+	}
+	maxBits := symbols*codeLen + 8
 	size := maxBits/8 + 8
-	if size > maxAlloc {
-		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
+	if size > limit {
+		return 0, false
 	}
-	dst := make([]byte, int(size))
-
-	var (
-		acc      uint64
-		bitCount uint
-		pos      int
-	)
-
-	emit := func(symbol int) {
-		acc |= uint64(encBits[symbol]) << bitCount
-		bitCount += uint(encLen[symbol])
-		for bitCount >= 8 {
-			dst[pos] = byte(acc)
-			pos++
-			acc >>= 8
-			bitCount -= 8
-		}
-	}
-
-	for _, symbol := range data {
-		emit(int(symbol))
-	}
-	emit(EofSymbol)
-
-	if bitCount != 0 {
-		dst[pos] = byte(acc)
-		pos++
-	}
-
-	if len(dst)-pos > 8192 && pos*2 < len(dst) {
-		out := make([]byte, pos)
-		copy(out, dst[:pos])
-		return out, nil
-	}
-	return dst[:pos], nil
+	return size, true
 }

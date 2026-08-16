@@ -12,9 +12,13 @@ var (
 )
 
 type Reader struct {
-	d       *Dictionary
-	br      io.ByteReader
-	bufSize int
+	d           *Dictionary
+	br          io.ByteReader
+	bufSize     int
+	acc         uint64
+	bitCount    uint
+	srcDrained  bool
+	terminalErr error
 }
 
 // New creates a new Reader with the default Teeworlds' dictionary.
@@ -46,23 +50,35 @@ func NewReaderDict(d *Dictionary, r io.Reader) *Reader {
 // The decompressed slice must be preallocated to fit the decompressed data.
 // Read is the size that was decompressed and written into the 'decompressed' slice.
 func (r *Reader) Read(decompressed []byte) (read int, err error) {
-	// read from underlying reader
+	if len(decompressed) == 0 {
+		if r.terminalErr != nil {
+			return 0, r.terminalErr
+		}
+		return 0, nil
+	}
+	if r.terminalErr != nil {
+		return 0, r.terminalErr
+	}
+	if r.d.maxCodeLen > maxStoredCodeBits {
+		err = fmt.Errorf("%w: dictionary contains %d-bit codes, maximum supported is %d", ErrHuffmanDecompress, r.d.maxCodeLen, maxStoredCodeBits)
+		r.terminalErr = err
+		return 0, err
+	}
 
 	var (
-		cursor     = 0
-		dstEnd     = len(decompressed)
+		cursor     int
 		lut        = &r.d.decLut
 		nodes      = &r.d.nodes
-		acc        uint64
-		bitCount   uint
-		srcDrained bool
+		acc        = r.acc
+		bitCount   = r.bitCount
+		srcDrained = r.srcDrained
 		b          byte
 	)
 
-	for cursor = 0; cursor < dstEnd; cursor++ {
-		// Refill to at least 56 bits. The underlying source is an
-		// io.ByteReader, so we must not read further ahead than we consume;
-		// bytes are pulled one at a time on purpose.
+	for cursor < len(decompressed) {
+		// Refill to at least 56 bits. Bytes are pulled through io.ByteReader
+		// one at a time and every prefetched bit is retained in Reader state
+		// when the caller's destination fills.
 		for !srcDrained && bitCount <= 56 {
 			b, err = r.br.ReadByte()
 			if err != nil {
@@ -71,6 +87,7 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 					break
 				}
 				// unexpected error, abort
+				r.terminalErr = err
 				return cursor, err
 			}
 
@@ -84,21 +101,27 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 		if codeLen != 0 {
 			// resolved straight out of the lookup table
 			if codeLen > bitCount {
-				return cursor, fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, codeLen, bitCount)
+				err = fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, codeLen, bitCount)
+				r.terminalErr = err
+				return cursor, err
 			}
 			acc >>= codeLen
 			bitCount -= codeLen
 
 			if entry&lutEOFBit != 0 {
-				break
+				r.terminalErr = io.EOF
+				return cursor, io.EOF
 			}
 			decompressed[cursor] = byte(entry >> lutSymShift)
+			cursor++
 			continue
 		}
 
 		// walk the tree bit by bit from where the lookup table landed
 		if bitCount < lookupTableBits {
-			return cursor, fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, lookupTableBits, bitCount)
+			err = fmt.Errorf("%w: truncated stream: need %d bits, have %d", ErrHuffmanDecompress, lookupTableBits, bitCount)
+			r.terminalErr = err
+			return cursor, err
 		}
 		idx := entry >> lutNodeShift
 		acc >>= lookupTableBits
@@ -106,14 +129,18 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 
 		for {
 			if bitCount == 0 {
-				return cursor, fmt.Errorf("%w: decoding error: symbol not found in tree", ErrHuffmanDecompress)
+				err = fmt.Errorf("%w: decoding error: symbol not found in tree", ErrHuffmanDecompress)
+				r.terminalErr = err
+				return cursor, err
 			}
 			idx = uint32(nodes[idx].Leafs[acc&1])
 			acc >>= 1
 			bitCount--
 
 			if idx >= uint32(len(nodes)) {
-				return cursor, fmt.Errorf("%w: invalid stream: walked off the tree", ErrHuffmanDecompress)
+				err = fmt.Errorf("%w: invalid stream: walked off the tree", ErrHuffmanDecompress)
+				r.terminalErr = err
+				return cursor, err
 			}
 			if nodes[idx].NumBits > 0 {
 				break
@@ -121,16 +148,28 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 		}
 
 		if idx == EofSymbol {
-			break
+			r.terminalErr = io.EOF
+			return cursor, io.EOF
 		}
 
 		decompressed[cursor] = nodes[idx].Symbol
+		cursor++
 	}
 
-	return cursor, io.EOF
+	// The destination filled before the Huffman EOF symbol. Preserve every
+	// prefetched bit and report a non-terminal read so the next call resumes
+	// exactly where this one stopped.
+	r.acc = acc
+	r.bitCount = bitCount
+	r.srcDrained = srcDrained
+	return cursor, nil
 }
 
 func (r *Reader) Reset(rr io.Reader) {
+	r.acc = 0
+	r.bitCount = 0
+	r.srcDrained = false
+	r.terminalErr = nil
 
 	// bufio.Reader implements this interface
 	br, ok := rr.(io.ByteReader)
