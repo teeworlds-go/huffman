@@ -14,6 +14,21 @@ const (
 	maxAlloc = uint64(1)<<(31+(^uint(0)>>63)*32) - 1
 )
 
+// Compile-time assertions about the sizing arithmetic. These are checked by
+// simply building for a target, so `GOARCH=386 go build` verifies the 32 bit
+// case without needing 32 bit hardware to run on.
+const (
+	// maxAlloc must be representable as an int, otherwise every int(size)
+	// conversion guarded by it could wrap. Underflows and fails to compile
+	// if maxAlloc ever exceeds the platform's MaxInt.
+	_ = uint64(^uint(0)>>1) - maxAlloc
+
+	// and it must be exactly MaxInt, not merely below it, so the guards are
+	// as permissive as the platform allows. Fails to compile if maxAlloc is
+	// smaller than MaxInt.
+	_ = maxAlloc - uint64(^uint(0)>>1)
+)
+
 // Compress compresses the given data using the default Teeworlds' dictionary.
 func Compress(data []byte) ([]byte, error) {
 	return NewHuffmanDict(DefaultDictionary).Compress(data)
@@ -87,16 +102,7 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	// a relative estimate so a 64 KiB payload does not reserve half a MiB.
 	// uint64 arithmetic throughout: on a 32 bit platform len(data)*8 would
 	// wrap for inputs above 256 MiB and hand make() a negative capacity.
-	initCap := uint64(len(data))*2 + 64
-	if initCap < 8192 {
-		initCap = 8192
-	}
-	if bound := uint64(len(data))*8 + 8; initCap > bound {
-		initCap = bound
-	}
-	if initCap > maxAlloc {
-		initCap = maxAlloc
-	}
+	initCap := decompressInitCap(len(data), maxAlloc)
 
 	// Append semantics. The estimate above is deliberately generous, so it
 	// must not be used as the bar a caller's buffer has to clear: demanding
@@ -107,7 +113,12 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	// the rare overflow. A fresh Decompress (dst == nil) always takes this
 	// branch and so keeps its single-allocation behaviour.
 	if uint64(cap(dst)-len(dst)) < uint64(len(data)) {
-		grown := make([]byte, len(dst), uint64(len(dst))+initCap)
+		// Clamp the total, not just initCap: on a 32 bit platform len(dst)
+		// can already be close to the int limit, and make() panics rather
+		// than failing gracefully if the capacity is not representable.
+		// Clamping only costs a later append growth in a case that is about
+		// to run out of address space anyway.
+		grown := make([]byte, len(dst), int(growCap(len(dst), initCap, maxAlloc)))
 		copy(grown, dst)
 		dst = grown
 	}
@@ -270,9 +281,8 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 	// Exact worst case: every symbol at the longest code, plus the EOF code
 	// and the final partial byte. Sizing up front removes every bounds check
 	// and every realloc from the hot loop.
-	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
-	size := maxBits/8 + 8
-	if size > maxAlloc {
+	size, ok := compressBufSize(len(data), d.maxCodeLen, maxAlloc)
+	if !ok {
 		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
 	}
 	dst := make([]byte, int(size))
@@ -335,9 +345,8 @@ func (huff *Huffman) compressDeep(data []byte) ([]byte, error) {
 	encBits := &d.encBits
 	encLen := &d.encLen
 
-	maxBits := (uint64(len(data))+1)*uint64(d.maxCodeLen) + 8
-	size := maxBits/8 + 8
-	if size > maxAlloc {
+	size, ok := compressBufSize(len(data), d.maxCodeLen, maxAlloc)
+	if !ok {
 		return nil, fmt.Errorf("%w: input of %d bytes needs more than %d bytes of output buffer", ErrHuffmanCompress, len(data), uint64(maxAlloc))
 	}
 	dst := make([]byte, int(size))
@@ -375,4 +384,53 @@ func (huff *Huffman) compressDeep(data []byte) ([]byte, error) {
 		return out, nil
 	}
 	return dst[:pos], nil
+}
+
+// Buffer sizing arithmetic, kept in one place and parameterised by limit (the
+// platform's maxAlloc) so the 32 bit behaviour is unit-testable on any host.
+// All of it runs in uint64: on a 32 bit platform len(data)*8 would wrap and
+// hand make() a nonsensical size.
+
+// decompressInitCap estimates the output capacity for a compressed payload of
+// inputLen bytes. Guessing low costs realloc+copy, guessing high wastes
+// memory, so small inputs get the hard upper bound of one symbol per input bit
+// (which still fits in 8 KiB at or below 1 KiB of input, covering every
+// teeworlds packet in a single allocation) and larger ones a relative estimate.
+func decompressInitCap(inputLen int, limit uint64) uint64 {
+	n := uint64(inputLen)
+	initCap := n*2 + 64
+	if initCap < 8192 {
+		initCap = 8192
+	}
+	if bound := n*8 + 8; initCap > bound {
+		initCap = bound
+	}
+	if initCap > limit {
+		initCap = limit
+	}
+	return initCap
+}
+
+// growCap is the capacity for a buffer that already holds dstLen bytes and
+// wants initCap more. The total is clamped, not just initCap: on a 32 bit
+// platform dstLen alone can be close to the int limit and make() panics rather
+// than failing gracefully on a capacity it cannot represent.
+func growCap(dstLen int, initCap, limit uint64) uint64 {
+	total := uint64(dstLen) + initCap
+	if total > limit {
+		total = limit
+	}
+	return total
+}
+
+// compressBufSize is the exact worst case output size for inputLen bytes:
+// every symbol at the longest code, plus the EOF code and a final partial
+// byte. Reports false when that cannot be represented on this platform.
+func compressBufSize(inputLen int, maxCodeLen uint8, limit uint64) (uint64, bool) {
+	maxBits := (uint64(inputLen)+1)*uint64(maxCodeLen) + 8
+	size := maxBits/8 + 8
+	if size > limit {
+		return 0, false
+	}
+	return size, true
 }
