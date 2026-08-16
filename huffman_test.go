@@ -196,3 +196,59 @@ func FuzzHuffmannCompressDecompress(f *testing.F) {
 		}
 	})
 }
+
+// DecompressTo must produce byte-identical output to Decompress, regardless of
+// what the caller-supplied buffer already holds (its old contents are discarded).
+func TestDecompressToMatchesDecompress(t *testing.T) {
+	huff := NewHuffman()
+
+	inputs := [][]byte{
+		[]byte("hello world"),
+		[]byte("1234567890abcdef1234567890abcdef"),
+		bytes.Repeat([]byte("teeworlds snapshot payload "), 32),
+	}
+
+	// A reused buffer with stale contents, to prove DecompressTo resets it.
+	reuse := make([]byte, 0, 512)
+	reuse = append(reuse, "stale"...)
+
+	for _, in := range inputs {
+		compressed, err := huff.Compress(in)
+		if err != nil {
+			t.Fatalf("compress: %v", err)
+		}
+
+		want, err := huff.Decompress(compressed)
+		if err != nil {
+			t.Fatalf("decompress: %v", err)
+		}
+
+		got, err := huff.DecompressTo(reuse[:0], compressed)
+		if err != nil {
+			t.Fatalf("decompress to: %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("DecompressTo mismatch: got %v want %v", got, want)
+		}
+		reuse = got // keep growing the shared buffer across iterations
+	}
+}
+
+// BenchmarkDecompressTo shows that reusing the output buffer across calls
+// reaches a steady state of 0 allocs/op (the whole reason DecompressTo exists).
+func BenchmarkDecompressTo(b *testing.B) {
+	huff := NewHuffman()
+	compressed, err := huff.Compress(bytes.Repeat([]byte("teeworlds snapshot payload "), 32))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buf := make([]byte, 0, 4096)
+	b.ReportAllocs()
+	for b.Loop() {
+		buf, err = huff.DecompressTo(buf[:0], compressed)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

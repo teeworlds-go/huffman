@@ -632,3 +632,73 @@ func TestDecodeLUTMatchesTree(t *testing.T) {
 		}
 	}
 }
+
+// TestDecompressToSemantics covers the append contract of DecompressTo across
+// the whole corpus: it must append rather than overwrite, must agree with
+// Decompress byte for byte, and must not reallocate a buffer that is already
+// large enough.
+func TestDecompressToSemantics(t *testing.T) {
+	huff := NewHuffman()
+	prefix := []byte("KEEP-ME")
+
+	for _, e := range regressionCorpus() {
+		compressed, err := huff.Compress(e.data)
+		if err != nil {
+			t.Fatalf("%s: compress: %v", e.name, err)
+		}
+		want, err := huff.Decompress(compressed)
+		if err != nil {
+			t.Fatalf("%s: decompress: %v", e.name, err)
+		}
+
+		// appends to existing content, leaving it intact
+		dst := append([]byte(nil), prefix...)
+		got, err := huff.DecompressTo(dst, compressed)
+		if err != nil {
+			t.Fatalf("%s: DecompressTo: %v", e.name, err)
+		}
+		if !bytes.HasPrefix(got, prefix) {
+			t.Fatalf("%s: DecompressTo overwrote the caller's existing bytes", e.name)
+		}
+		if !bytes.Equal(got[len(prefix):], want) {
+			t.Fatalf("%s: DecompressTo payload differs from Decompress", e.name)
+		}
+
+		// a buffer with ample spare capacity must be reused, not replaced
+		big := make([]byte, 0, len(e.data)+len(compressed)+8192)
+		before := &big[:1][0]
+		out, err := huff.DecompressTo(big[:0], compressed)
+		if err != nil {
+			t.Fatalf("%s: DecompressTo(reused): %v", e.name, err)
+		}
+		if !bytes.Equal(out, want) {
+			t.Fatalf("%s: reused-buffer output differs", e.name)
+		}
+		if len(out) > 0 && &out[0] != before {
+			t.Fatalf("%s: DecompressTo reallocated a buffer that was already big enough", e.name)
+		}
+	}
+}
+
+// TestDecompressToZeroAlloc pins the property the API exists for.
+func TestDecompressToZeroAlloc(t *testing.T) {
+	huff := NewHuffman()
+	payload := snapshotLike(61, 1400)
+	compressed, err := huff.Compress(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 0, 4096)
+	buf, err = huff.DecompressTo(buf[:0], compressed) // warm up
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		buf, _ = huff.DecompressTo(buf[:0], compressed)
+	})
+	if allocs != 0 {
+		t.Errorf("DecompressTo with a reused buffer: %.1f allocs/op, want 0", allocs)
+	}
+}

@@ -59,6 +59,19 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
 	}
+	return huff.DecompressTo(nil, data)
+}
+
+// DecompressTo decompresses data, APPENDING the decompressed bytes to dst and
+// returning the extended slice (like Go's append). Pass a reused buffer's
+// dst[:0] to avoid allocating a fresh output slice on every call — useful on
+// hot paths that decompress many packets (e.g. a 50Hz snapshot stream). dst may
+// be nil. huff is not modified, so a single Huffman value is safe for
+// concurrent DecompressTo calls with distinct dst buffers.
+func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return dst, nil
+	}
 
 	d := huff.Dictionary
 	lut := &d.decLut
@@ -84,7 +97,20 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 	if initCap > maxAlloc {
 		initCap = maxAlloc
 	}
-	dst := make([]byte, 0, int(initCap))
+
+	// Append semantics. The estimate above is deliberately generous, so it
+	// must not be used as the bar a caller's buffer has to clear: demanding
+	// it would reallocate a perfectly usable reused buffer on every call and
+	// defeat the point of DecompressTo. Only pre-grow when the spare capacity
+	// is below the compressed size, which is the point at which regrowth
+	// becomes near certain; otherwise trust the caller and let append handle
+	// the rare overflow. A fresh Decompress (dst == nil) always takes this
+	// branch and so keeps its single-allocation behaviour.
+	if uint64(cap(dst)-len(dst)) < uint64(len(data)) {
+		grown := make([]byte, len(dst), uint64(len(dst))+initCap)
+		copy(grown, dst)
+		dst = grown
+	}
 
 	var (
 		acc      uint64 // bit accumulator, LSB first
