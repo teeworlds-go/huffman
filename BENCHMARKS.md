@@ -1,27 +1,75 @@
 # Benchmarks
 
-Before/after for the codec rewrite (commit `3a3eece` → `HEAD`).
+## Security hardening follow-up (`36bf501` → `6dcbb68`)
 
-## Method
+The security and 32-bit fixes were measured separately from the performance
+rewrite, so their cost is visible instead of being hidden inside the much
+larger original wins. All Teeworlds-sized `snapshot/1400B` paths and the
+end-to-end roundtrip are statistically unchanged. Allocations and bytes
+allocated are identical in every case.
 
-Both revisions are benchmarked from the **same** working tree, so the benchmark
-definitions and corpora are identical and only the codec differs. The two test
-binaries are run **alternately**, six rounds each, so thermal drift and
-background load hit both arms equally rather than biasing whichever ran first.
-`benchstat` reports the delta with a Mann-Whitney p-value.
+Family geomeans are descriptive summaries over each corpus/size combination:
+
+| Benchmark family    | merged #10 | hardened | delta  |
+| ------------------- | ---------- | -------- | ------ |
+| `Compress`          | 9.520 µs   | 9.720 µs | +2.11% |
+| `Decompress`        | 18.93 µs   | 18.77 µs | -0.85% |
+| `Writer`            | 6.340 µs   | 6.366 µs | +0.42% |
+| `Reader`            | 25.93 µs   | 26.20 µs | +1.05% |
+| `DecompressToReuse` | 16.91 µs   | 16.88 µs | -0.15% |
+| **full suite**      | 14.33 µs   | 14.40 µs | +0.50% |
+
+The packet-sized cases, where `~` means `benchstat` did not find a significant
+difference at p < 0.05:
+
+| Benchmark                          | merged #10 | hardened | result        |
+| ---------------------------------- | ---------- | -------- | ------------- |
+| `Compress/snapshot/1400B`          | 1.704 µs   | 1.777 µs | ~ (p=0.240)   |
+| `Decompress/snapshot/1400B`        | 3.285 µs   | 3.221 µs | ~ (p=0.132)   |
+| `Writer/snapshot/1400B`            | 815.5 ns   | 814.8 ns | ~ (p=0.818)   |
+| `Reader/snapshot/1400B`            | 3.855 µs   | 3.905 µs | ~ (p=0.310)   |
+| `DecompressToReuse/snapshot/1400B` | 2.895 µs   | 2.876 µs | ~ (p=0.485)   |
+| `Roundtrip`                        | 4.953 µs   | 4.981 µs | ~ (p=0.485)   |
+| `NewDictionary`                    | 223.6 µs   | 223.6 µs | ~ (p=0.937)   |
+
+The only large, statistically significant regression is
+`Compress/text/64KB` at +9.36% (77.59 µs → 84.86 µs, p=0.002). Small-buffer
+`Writer` and `Reader` cases also move by 2-3%; none affect the 1,400-byte
+snapshot path significantly. The original rewrite still compresses the 64 KiB
+text corpus roughly 36% faster than the pre-rewrite implementation.
+
+### Method
+
+Both revisions were staged with only their package sources plus identical
+copies of `bench_test.go` and `corpus_test.go`, eliminating unrelated test
+linker-layout differences. Two test binaries were run for six 250 ms samples
+each, alternating base/head and head/base order between pairs. `benchstat`
+reports medians and Mann-Whitney p-values. Environment: Apple M2 Pro,
+darwin/arm64, Go 1.26.6.
 
 Reproduce with:
 
 ```shell
-make benchcmp REV=3a3eece
+make benchcmp REV=36bf501 BENCH_COUNT=6 BENCH_TIME=250ms
 ```
+
+## Original codec rewrite (`3a3eece` → `14b4085`)
+
+### Method
+
+These are the archived measurements recorded while the rewrite was developed.
+Both revisions used identical corpus generation and were run alternately for
+six rounds; `benchstat` reported the delta with a Mann-Whitney p-value. The
+current `benchcmp` target cannot use `3a3eece` directly because today's
+benchmark file exercises `DecompressTo`, an API that did not exist at that
+revision. Use the isolated follow-up command above for current comparisons.
 
 Corpora: `snapshot` mimics teeworlds network traffic (runs of zeroes, small
 integers, occasional ASCII), `skewed` is drawn from the default frequency
 table, `random` is uniform white noise (the dictionary's worst case), `text`
 and `zeroes` bracket the extremes. 1400 B is a typical teeworlds packet.
 
-## Results, arm64 (Apple M2 Pro, go1.26.6, darwin)
+### Results, arm64 (Apple M2 Pro, go1.26.6, darwin)
 
 Throughput over *uncompressed* bytes. Negative time = faster.
 
@@ -59,7 +107,7 @@ Peak throughput after: **~1.45 GiB/s** encode (`Writer` skewed/64KB),
 build. It is a one-time cost paid once per process for the package-level
 `DefaultDictionary`, traded for the decode wins above.
 
-### Allocations
+#### Allocations
 
 The encoder now sizes its output buffer up front instead of growing it:
 
@@ -72,7 +120,7 @@ The encoder now sizes its output buffer up front instead of growing it:
 
 A teeworlds-sized packet is one allocation in each direction.
 
-## x86-64
+### x86-64
 
 The development machine is arm64, so **native x86-64 numbers were not
 measured**. Running the amd64 build under Rosetta 2 gives the relative deltas
@@ -96,7 +144,7 @@ working set in the 32-48 KiB L1d of a typical x86-64 core, where 32 KiB would
 not. Confirming that on real x86-64 hardware is worth doing before relying on
 these numbers there.
 
-## What changed
+### What changed
 
 - Decode table flattened from `[N]*node` (8 KiB of pointers into 12-byte
   structs) to `[N]uint32` packing symbol, code length, EOF flag and tree-walk
@@ -108,7 +156,7 @@ these numbers there.
   output up front so the hot loop has no reallocation.
 - `Writer`/`Reader` share the same tables and accumulator strategy.
 
-## Cross-implementation: ddnet master (C++) vs this library (Go)
+### Cross-implementation: ddnet master (C++) vs this library (Go)
 
 Against ddnet `master` HEAD, `src/engine/shared/huffman.cpp` compiled
 **verbatim** (only `base/dbg.h` and `base/mem.h` stubbed), Apple clang 21,
@@ -119,7 +167,7 @@ Validity check first: **both implementations produce byte-identical compressed
 output on all nine corpora**, and ddnet's bytes round-trip through our decoder.
 So both decoders consume exactly the same input.
 
-### Encode
+#### Encode
 
 The two APIs differ in shape: ddnet's `Compress` writes into a caller-supplied
 buffer and never allocates, ours returns a fresh slice. Both are reported.
@@ -137,7 +185,7 @@ a result slice per call, which is an API choice, not a codec difference.
 Per case, `Writer` vs ddnet: snapshot/1400B -44.6%, skewed/64KB -47.8%,
 zeroes/64KB -49.2%, text/64KB -16.6%, snapshot/64KB ~, random/64KB +32.0%.
 
-### Decode
+#### Decode
 
 `DecompressTo(dst[:0], data)` reuses the caller's buffer and is the same API
 shape as ddnet's `Decompress`, so this is the like-for-like row. The allocating
@@ -167,7 +215,7 @@ B/op for both arms, i.e. it never took effect). Measured properly against
 `DecompressTo`, `zeroes/64KB` flips from +15.5% to -6.3%, so allocation was
 most of that gap, not a codec deficit.
 
-### Summary
+#### Summary
 
 Comparing like for like — both sides writing into a reused caller buffer —
 this Go implementation is **29.2% faster on encode** and **20.6% faster on
