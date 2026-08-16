@@ -102,6 +102,39 @@ func BenchmarkReader(b *testing.B) {
 	}
 }
 
+// BenchmarkDecompressToReuse is the decode counterpart of BenchmarkWriter: it
+// reuses the output buffer across calls, which is the same API shape ddnet's
+// C++ Decompress has (it writes into a caller-supplied buffer). This is the
+// benchmark to use when comparing against that implementation like for like.
+func BenchmarkDecompressToReuse(b *testing.B) {
+	huff := NewHuffman()
+	for _, e := range benchCorpus {
+		compressed, err := huff.Compress(e.data)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(e.name, func(b *testing.B) {
+			buf := make([]byte, 0, len(e.data)+64)
+			// warm up so the buffer has reached its steady-state capacity;
+			// this measures the reuse case, not the first call
+			buf, err = huff.DecompressTo(buf[:0], compressed)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(len(e.data)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				buf, err = huff.DecompressTo(buf[:0], compressed)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			sinkBytes = buf
+		})
+	}
+}
+
 // BenchmarkRoundtrip measures the full encode+decode path on a typical
 // teeworlds-sized packet, which is the dominant real-world workload.
 func BenchmarkRoundtrip(b *testing.B) {

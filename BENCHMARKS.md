@@ -128,7 +128,7 @@ buffer and never allocates, ours returns a fresh slice. Both are reported.
 | ------------------------------------- | --------- | ---------- |
 | ddnet `Compress` (caller buffer)       | 9.06 µs   | baseline   |
 | ours `Compress` (allocates result)     | 10.24 µs  | +12.9%     |
-| ours `Writer` (reuses buffer)          | 6.45 µs   | **-28.8%** |
+| ours `Writer` (reuses buffer)          | 6.37 µs   | **-29.2%** |
 
 Like for like — both writing into a reused buffer — the Go encoder is **28.8%
 faster than the C++ one**. The gap in the middle row is the cost of allocating
@@ -139,28 +139,41 @@ zeroes/64KB -49.2%, text/64KB -16.6%, snapshot/64KB ~, random/64KB +32.0%.
 
 ### Decode
 
-| | ddnet | ours | delta |
-| ----------------- | -------- | -------- | ---------- |
-| snapshot/1400B    | 3.95 µs  | 3.54 µs  | **-10.4%** |
-| snapshot/64KB     | 242.0 µs | 171.9 µs | **-28.9%** |
-| random/64KB       | 563.0 µs | 259.3 µs | **-54.0%** |
-| text/64KB         | 204.1 µs | 150.6 µs | **-26.2%** |
-| zeroes/64KB       | 87.5 µs  | 101.0 µs | +15.5%     |
-| skewed/64KB       | 87.2 µs  | 119.2 µs | +36.6%     |
-| **geomean**       | 21.6 µs  | 20.2 µs  | **-6.4%**  |
+`DecompressTo(dst[:0], data)` reuses the caller's buffer and is the same API
+shape as ddnet's `Decompress`, so this is the like-for-like row. The allocating
+`Decompress` convenience wrapper is shown next to it for reference.
+
+| | ddnet | ours (`DecompressTo`) | delta | ours (`Decompress`, allocates) |
+| ----------------- | -------- | -------- | ---------- | -------- |
+| snapshot/64B      | 162.4 ns | 121.2 ns | **-25.3%** | 171.0 ns |
+| snapshot/1400B    | 3.94 µs  | 2.95 µs  | **-25.0%** | 3.54 µs  |
+| snapshot/64KB     | 239.4 µs | 154.3 µs | **-35.6%** | 171.9 µs |
+| random/1400B      | 3.82 µs  | 2.99 µs  | **-21.6%** | 3.96 µs  |
+| random/64KB       | 545.0 µs | 234.1 µs | **-57.1%** | 259.3 µs |
+| text/64KB         | 200.0 µs | 135.5 µs | **-32.2%** | 150.6 µs |
+| zeroes/64KB       | 85.3 µs  | 79.9 µs  | **-6.3%**  | 101.0 µs |
+| skewed/1400B      | 1.94 µs  | 2.69 µs  | +38.4%     | 2.94 µs  |
+| skewed/64KB       | 85.1 µs  | 100.3 µs | +17.9%     | 119.2 µs |
+| **geomean**       | 21.3 µs  | 16.9 µs  | **-20.6%** | 20.2 µs  |
 
 The wins are where codes are long and ddnet falls back to bit-by-bit tree
-walks — our 12-bit flat table resolves those in one load. The losses are on
-degenerate short-code payloads (`zeroes`, `skewed` are ~1 bit per symbol),
-where there is little to accelerate and ddnet's tighter loop wins. Measured
-with an exact-size output buffer, only ~5% of the `zeroes` gap is allocation,
-so this is genuine codec cost rather than an artefact of our allocating API.
+walks; our 12-bit flat table resolves those in one load. `skewed` is the one
+remaining loss: it is ~1 bit per symbol, so there is nothing to accelerate and
+ddnet's tighter loop wins.
+
+Correction to an earlier measurement: a probe suggested only ~5% of the
+`zeroes` gap was allocation. That probe was faulty (it reported identical
+B/op for both arms, i.e. it never took effect). Measured properly against
+`DecompressTo`, `zeroes/64KB` flips from +15.5% to -6.3%, so allocation was
+most of that gap, not a codec deficit.
 
 ### Summary
 
-Roughly at parity with the C++ implementation overall, ahead on both halves
-once the API shapes are matched: **-28.8% encode** buffer-to-buffer and
-**-6.4% decode**, with the largest single win (-54%) on high-entropy payloads.
+Comparing like for like — both sides writing into a reused caller buffer —
+this Go implementation is **29.2% faster on encode** and **20.6% faster on
+decode** than the C++ one, with the largest single win (-57%) on high-entropy
+payloads. The convenience wrappers that allocate a result slice give up part
+of that margin, which is an API cost rather than a codec one.
 Note ddnet only optimized its encoder in #12519; its decoder is still the
 classic 10-bit pointer-table version, which is where most of our decode
 advantage comes from.
