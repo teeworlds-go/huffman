@@ -3,7 +3,6 @@ package huffman
 import (
 	"encoding/binary"
 	"fmt"
-	"unsafe"
 )
 
 const (
@@ -85,9 +84,9 @@ func (huff *Huffman) Decompress(data []byte) ([]byte, error) {
 // returning the extended slice (like Go's append). Pass a reused buffer's
 // dst[:0] to avoid allocating a fresh output slice on every call — useful on
 // hot paths that decompress many packets (e.g. a 50Hz snapshot stream). dst may
-// be nil and may overlap data; overlapping source bytes are preserved before
-// output is appended. huff is not modified, so a single Huffman value is safe
-// for concurrent DecompressTo calls with distinct dst buffers.
+// be nil, but dst and data must not share backing storage; passing overlapping
+// slices is invalid use. huff is not modified, so a single Huffman value is
+// safe for concurrent DecompressTo calls with distinct dst buffers.
 func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	if huff == nil || !huff.Dictionary.isInitialized() {
 		return nil, fmt.Errorf("%w: dictionary is nil or uninitialized", ErrHuffmanDecompress)
@@ -102,14 +101,6 @@ func (huff *Huffman) DecompressTo(dst, data []byte) ([]byte, error) {
 	}
 	lut := &d.decLut
 	nodes := &d.nodes
-
-	// Decompression can expand one input byte into several output bytes. If
-	// dst's writable capacity overlaps data, appending output could therefore
-	// overwrite compressed bytes before the decoder consumes them. Preserve
-	// append-style in-place use by copying only in this exceptional case.
-	if byteSlicesOverlap(dst[len(dst):cap(dst)], data) {
-		data = append([]byte(nil), data...)
-	}
 
 	// Output sizing. Two competing costs: guessing low means realloc+copy,
 	// guessing high wastes memory and page faults.
@@ -356,22 +347,6 @@ func (huff *Huffman) Compress(data []byte) ([]byte, error) {
 		return out, nil
 	}
 	return dst[:pos], nil
-}
-
-// byteSlicesOverlap reports whether the two slice ranges share any byte. It
-// compares addresses only; it never converts uintptr values back to pointers.
-// Using subtraction instead of computing end addresses also avoids uintptr
-// overflow on 32 bit platforms.
-func byteSlicesOverlap(a, b []byte) bool {
-	if len(a) == 0 || len(b) == 0 {
-		return false
-	}
-	aStart := uintptr(unsafe.Pointer(unsafe.SliceData(a)))
-	bStart := uintptr(unsafe.Pointer(unsafe.SliceData(b)))
-	if aStart <= bStart {
-		return bStart-aStart < uintptr(len(a))
-	}
-	return aStart-bStart < uintptr(len(b))
 }
 
 // Buffer sizing arithmetic, kept in one place and parameterised by limit (the
