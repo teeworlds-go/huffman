@@ -50,6 +50,9 @@ func NewReaderDict(d *Dictionary, r io.Reader) *Reader {
 // The decompressed slice must be preallocated to fit the decompressed data.
 // Read is the size that was decompressed and written into the 'decompressed' slice.
 func (r *Reader) Read(decompressed []byte) (read int, err error) {
+	if r == nil {
+		return 0, fmt.Errorf("%w: reader is nil", ErrHuffmanDecompress)
+	}
 	if len(decompressed) == 0 {
 		if r.terminalErr != nil {
 			return 0, r.terminalErr
@@ -58,6 +61,11 @@ func (r *Reader) Read(decompressed []byte) (read int, err error) {
 	}
 	if r.terminalErr != nil {
 		return 0, r.terminalErr
+	}
+	if !r.d.isInitialized() {
+		err = fmt.Errorf("%w: dictionary is nil or uninitialized", ErrHuffmanDecompress)
+		r.terminalErr = err
+		return 0, err
 	}
 	if r.d.maxCodeLen > maxStoredCodeBits {
 		err = fmt.Errorf("%w: dictionary contains %d-bit codes, maximum supported is %d", ErrHuffmanDecompress, r.d.maxCodeLen, maxStoredCodeBits)

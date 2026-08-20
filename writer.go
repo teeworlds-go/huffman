@@ -60,6 +60,12 @@ func (w *Writer) Reset(rw io.Writer) {
 // Write compresses the passed data and writes it to the underlying writer.
 // The returned value is the number of uncompressed bytes that were written.
 func (w *Writer) Write(data []byte) (written int, err error) {
+	if w == nil {
+		return 0, fmt.Errorf("%w: writer is nil", ErrHuffmanCompress)
+	}
+	if !w.d.isInitialized() {
+		return 0, fmt.Errorf("%w: dictionary is nil or uninitialized", ErrHuffmanCompress)
+	}
 	d := w.d
 
 	// Dictionary codes are stored as uint32. Reject deeper custom trees rather

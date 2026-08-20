@@ -112,6 +112,14 @@ func NewDictionary() *Dictionary {
 	return NewDictionaryWithFrequencies(TeeworldsFrequencyTable)
 }
 
+// isInitialized reports whether d was built by one of the dictionary
+// constructors. Dictionary has exported type so callers can create its zero
+// value, but its tables are intentionally private and a zero-value dictionary
+// cannot encode or decode a valid Huffman stream.
+func (d *Dictionary) isInitialized() bool {
+	return d != nil && d.numNodes == maxNodes && d.maxCodeLen != 0
+}
+
 func NewDictionaryWithFrequencies(frequencyTable [MaxSymbols]uint32) *Dictionary {
 
 	d := Dictionary{}
