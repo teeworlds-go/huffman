@@ -315,6 +315,153 @@ func TestUnsupportedDeepDictionaryIsRejected(t *testing.T) {
 	}
 }
 
+func TestNilAndZeroValueDictionariesAreRejected(t *testing.T) {
+	for name, dict := range map[string]*Dictionary{
+		"nil":  nil,
+		"zero": new(Dictionary),
+	} {
+		t.Run(name, func(t *testing.T) {
+			huff := NewHuffmanDict(dict)
+			for _, data := range [][]byte{nil, []byte("payload")} {
+				if _, err := huff.Compress(data); !errors.Is(err, ErrHuffmanCompress) {
+					t.Errorf("Compress(%d bytes) error = %v, want ErrHuffmanCompress", len(data), err)
+				}
+				if _, err := huff.Decompress(data); !errors.Is(err, ErrHuffmanDecompress) {
+					t.Errorf("Decompress(%d bytes) error = %v, want ErrHuffmanDecompress", len(data), err)
+				}
+				if _, err := huff.DecompressTo(nil, data); !errors.Is(err, ErrHuffmanDecompress) {
+					t.Errorf("DecompressTo(%d bytes) error = %v, want ErrHuffmanDecompress", len(data), err)
+				}
+			}
+
+			var compressed bytes.Buffer
+			if n, err := NewWriterDict(dict, &compressed).Write([]byte("payload")); n != 0 || !errors.Is(err, ErrHuffmanCompress) {
+				t.Errorf("Writer.Write = (%d, %v), want (0, ErrHuffmanCompress)", n, err)
+			}
+			if n, err := NewReaderDict(dict, bytes.NewReader([]byte{0})).Read(make([]byte, 1)); n != 0 || !errors.Is(err, ErrHuffmanDecompress) {
+				t.Errorf("Reader.Read = (%d, %v), want (0, ErrHuffmanDecompress)", n, err)
+			}
+		})
+	}
+
+	var nilHuffman *Huffman
+	if _, err := nilHuffman.Compress(nil); !errors.Is(err, ErrHuffmanCompress) {
+		t.Errorf("nil Huffman.Compress error = %v, want ErrHuffmanCompress", err)
+	}
+	if _, err := nilHuffman.Decompress(nil); !errors.Is(err, ErrHuffmanDecompress) {
+		t.Errorf("nil Huffman.Decompress error = %v, want ErrHuffmanDecompress", err)
+	}
+	var nilWriter *Writer
+	if _, err := nilWriter.Write(nil); !errors.Is(err, ErrHuffmanCompress) {
+		t.Errorf("nil Writer.Write error = %v, want ErrHuffmanCompress", err)
+	}
+	var nilReader *Reader
+	if _, err := nilReader.Read(make([]byte, 1)); !errors.Is(err, ErrHuffmanDecompress) {
+		t.Errorf("nil Reader.Read error = %v, want ErrHuffmanDecompress", err)
+	}
+	if _, err := CompressDict(nil, nil); !errors.Is(err, ErrHuffmanCompress) {
+		t.Errorf("CompressDict(nil) error = %v, want ErrHuffmanCompress", err)
+	}
+	if _, err := DecompressDict(nil, nil); !errors.Is(err, ErrHuffmanDecompress) {
+		t.Errorf("DecompressDict(nil) error = %v, want ErrHuffmanDecompress", err)
+	}
+}
+
+func TestCopiedDictionaryRemainsUsable(t *testing.T) {
+	dict := *NewDictionary()
+	huff := NewHuffmanDict(&dict)
+	payload := snapshotLike(61, 1400)
+	compressed, err := huff.Compress(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decompressed, err := huff.Decompress(compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decompressed, payload) {
+		t.Fatal("copied dictionary roundtrip mismatch")
+	}
+}
+
+func TestDecompressToSupportsOverlappingInput(t *testing.T) {
+	huff := NewHuffman()
+	payloads := [][]byte{
+		bytes.Repeat([]byte{0}, 64<<10),
+		bytes.Repeat([]byte{1}, 64<<10),
+		snapshotLike(62, 64<<10),
+		randomBytes(63, 64<<10),
+	}
+	tests := []struct {
+		name      string
+		srcOffset int
+		dstOffset int
+		dstLen    int
+	}{
+		{"same-start", 0, 0, 0},
+		{"output-before-input", 64, 0, 8},
+		{"input-before-output", 0, 64, 0},
+	}
+
+	for payloadIndex, payload := range payloads {
+		compressed, err := huff.Compress(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tt := range tests {
+			t.Run(itoa(payloadIndex)+"/"+tt.name, func(t *testing.T) {
+				storageLen := tt.srcOffset + len(compressed)
+				if needed := tt.dstOffset + tt.dstLen + len(payload); storageLen < needed {
+					storageLen = needed
+				}
+				storage := make([]byte, storageLen)
+				for i := 0; i < tt.dstLen; i++ {
+					storage[tt.dstOffset+i] = byte(0xa0 + i)
+				}
+				prefix := append([]byte(nil), storage[tt.dstOffset:tt.dstOffset+tt.dstLen]...)
+				copy(storage[tt.srcOffset:], compressed)
+
+				dst := storage[tt.dstOffset : tt.dstOffset+tt.dstLen]
+				data := storage[tt.srcOffset : tt.srcOffset+len(compressed)]
+				got, err := huff.DecompressTo(dst, data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := append(prefix, payload...)
+				if !bytes.Equal(got, want) {
+					t.Fatalf("got %d bytes, want %d", len(got), len(want))
+				}
+			})
+		}
+	}
+}
+
+func TestByteSlicesOverlap(t *testing.T) {
+	buf := make([]byte, 32)
+	other := make([]byte, 32)
+	tests := []struct {
+		name string
+		a    []byte
+		b    []byte
+		want bool
+	}{
+		{"same", buf, buf, true},
+		{"contained", buf[4:20], buf[8:12], true},
+		{"partial", buf[:16], buf[8:24], true},
+		{"reverse-partial", buf[8:24], buf[:16], true},
+		{"adjacent", buf[:16], buf[16:], false},
+		{"separate", buf, other, false},
+		{"empty", buf[:0], buf, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := byteSlicesOverlap(tt.a, tt.b); got != tt.want {
+				t.Fatalf("byteSlicesOverlap = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestWriterMatchesCompress: the streaming Writer must emit exactly what the
 // one-shot Compress emits.
 func TestWriterMatchesCompress(t *testing.T) {
